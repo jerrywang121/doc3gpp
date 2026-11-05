@@ -7,12 +7,12 @@
 #
 # Precedence (highest wins):
 #   1. CLI flags
-#   2. Environment variables — only the ALLOWED_ENV_VARS subset of
-#      DOC3GPP_* (see src/doc3gpp/settings/schema.py). Anything else is
-#      silently ignored, so this file is the single source of truth for
-#      every other setting.
+#   2. Process environment — only the ALLOWED_ENV_VARS subset of DOC3GPP_*
+#      (see src/doc3gpp/settings/schema.py); other process overrides are ignored.
 #   3. This file
-#   4. Built-in defaults
+#   4. .env values (currently not filtered by the process-env allowlist)
+#   5. File secrets, then built-in defaults
+# See docs/config.md for discovery, precedence, and the dotenv caveat.
 #
 # Run `doc3gpp config show` to inspect the resolved configuration,
 # and `doc3gpp config path` to see which file is in effect.
@@ -43,11 +43,11 @@
 # http_max_retries = 3
 # http_retry_backoff = 0.5      # seconds; doubles per attempt
 
-# ── Output defaults for every `* list` command ──────────────────────────────
-# `format` becomes the default for --format on meeting/tdoc/tsg/wi list.
+# ── Output defaults for CLI lists and spec-doc search ────────────────────────
+# `format` becomes the default for list commands and spec-doc search.
 # CLI flags --format and --fields always win over this file.
-# The `fields.<command>` lists mirror the previously hardcoded defaults;
-# trim them when the default columns are too noisy.
+# The `fields.<command>` lists mirror the human-readable defaults; trim them
+# when the default columns are too noisy.
 
 # [output]
 # format = "table"     # table | json | markdown
@@ -55,7 +55,7 @@
 
 # [output.fields]
 # meeting = [
-#   "meeting_id", "name", "tsg", "location",
+#   "meeting_id", "name", "location",
 #   "start_date", "end_date",
 #   "ftp_url", "start_doc", "end_doc",
 # ]
@@ -81,14 +81,14 @@
 #   "group", "release", "statuses",
 # ]
 # spec_doc = [
-#   "spec_id", "version", "release", "sections", "tables",
+#   "spec_id", "version", "release", "source_file", "sections", "tables",
 #   "chunk_index", "text",
 # ]
 
 # ── TDoc extraction cache ───────────────────────────────────────────────────
 # Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc parse`).
 # `dir` holds two subtrees: `zips/` (raw 3GPP downloads) and `markdown/`
-# (python-docx output, keyed by content hash). When the combined size of
+# (derived Office Markdown archives, sharing the per-URL ZIP key). When the combined size of
 # both exceeds `size_limit_mb`, the cache evicts the oldest files first
 # (FIFO on `st_ctime`); `0` means unlimited. `purge_confirm` gates the
 # `doc3gpp cache purge` CLI behind an interactive prompt — set it to
@@ -143,7 +143,7 @@ max_uncompressed_size_kb = 102400
 # [sync]
 # auto_sync = true                # automatically sync before list/show/parse read commands
 # meeting_sync_interval = "24h"   # skip meeting calendar sync if last sync is newer than this
-# Minimum time between spec-list syncs for the same TSG.
+# Minimum time between detail syncs for each spec (specs.last_synced_at).
 # spec_sync_interval = "24h"
 # tdoc_list_sync_interval = "30m" # skip TDoc list sync if last sync is newer than this
 # tdoc_list_closed_window = "90d" # skip TDoc list sync when meeting end_date is older than this
@@ -207,7 +207,8 @@ search_fanout_factor = 4
 
 # Trailing-token overlap between consecutive chunks. Null reuses
 # `semantic_search.chunk_overlap`; an explicit value wins.
-# chunk_overlap = null
+# Omit to inherit; TOML has no null literal. Example override:
+# chunk_overlap = 24
 
 # When true, every successful spec-doc parse upserts the new chunks
 # into the FTS5 `spec_doc_search` index so search sees the latest rows.
@@ -272,7 +273,8 @@ search_fanout_factor = 4
 # per-request HTTP timeout via `embedding_timeout_s` (1..300s), and max
 # inputs per `/embeddings` request via `embedding_batch_size` (1..512).
 # embedding_base_url = "http://localhost:11434/v1"
-# embedding_api_key = null
+# Omit when unused; TOML has no null literal. Prefer the environment variable.
+# embedding_api_key = "your-api-key"
 # embedding_timeout_s = 30.0
 # embedding_batch_size = 32
 
@@ -353,8 +355,9 @@ port = 13999
 
 # Minimum interval between periodic progress log lines emitted by the
 # job worker for long-running jobs. At most one line per interval is
-# written to the job log / SSE stream; the final pending line is always
-# flushed on completion. Range 0.1..60.0 seconds.
+# written to the job log / SSE stream.
+# Forced progress lines bypass throttling; suppressed lines are not buffered.
+# Range 0.1..60.0 seconds.
 # progress_interval_seconds = 10.0
 
 # How often the worker prunes terminal rows older than `log_retention`.
@@ -362,7 +365,7 @@ port = 13999
 # does not affect how quickly new jobs are picked up. Minimum 10s.
 # cleanup_interval_seconds = 300
 
-# Retention window for completed-job log files. Parsed by
+# Retention window for terminal job rows and their SQL logs (not server.log rotation). Parsed by
 # humanfriendly.parse_timespan so values like `7d`, `24h`, `30m` are
 # accepted.
 # log_retention = "7d"

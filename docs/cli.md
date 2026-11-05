@@ -1,8 +1,10 @@
 # CLI Reference
 
-This document describes the currently implemented command surface in src/doc3gpp/cli.py.
-
-> Last reviewed: 2026-08-13
+This is the command/flag/output reference for `src/doc3gpp/cli.py` and
+`cli_server.py`. See [configuration](config.md) for settings, [processes](processes.md)
+for runtime flows, [web](web-server.md) for HTTP operation, and [MCP](mcp.md)
+for agent tools. [Known constraints](known-constraints.md) calls out implementation
+mismatches rather than treating advertised behavior as proof.
 
 ## Installation
 
@@ -15,15 +17,15 @@ pip install "doc3gpp[cli]"
 # via pipx (isolated environment)
 pipx install "doc3gpp[cli]"
 
-# everything (CLI + extract + search + semantic)
+# everything (CLI + extract + search + semantic + web/MCP)
 pip install "doc3gpp[all]"
 
 # development (editable install)
 pip install -e ".[dev]"
 ```
 
-> **Note:** `pip install doc3gpp` (without `[cli]`) installs the SDK only —
-> the `doc3gpp` CLI command will not be available.
+> **Note:** `pip install doc3gpp` installs the core SDK; use `[cli]` for the
+> dependencies needed to run the installed console entrypoint.
 
 ## Command Entry
 
@@ -36,69 +38,26 @@ pip install -e ".[dev]"
 
 ## Auto-sync behavior
 
-The read commands `meeting list`, `tdoc list`, `tdoc show`, and database-mode
-`tdoc parse` can automatically trigger internal syncs before querying. This is
-controlled by the `sync.auto_sync` setting:
-
-```toml
-[sync]
-auto_sync = true    # default; set to false to disable
-```
-
-When enabled:
-
-- `meeting list` may internally call the equivalent of `meeting sync --tsg`
-  for the candidate TSG(s) inferred from `--tsg` or `--tdoc`.
-- `tdoc list` may internally call both `meeting sync` (for inferred TSGs) and
-  `tdoc sync --meeting-id` (for inferred meeting IDs).
-- `tdoc show` delegates to the same auto-sync logic as `tdoc list --tdoc`.
-- `tdoc parse` (without `--from-path` or `--from-url`) delegates to the same
-  auto-sync logic as `tdoc list` with the same filters.
-- `tdoc parse --from-path` and `tdoc parse --from-url` run the direct-mode sync
-  steps (TSG sync, meeting sync, TDoc-list sync) for the TDoc id derived from the
-  source before parsing. The id comes from the file name for `--from-path`, and
-  for a 3GPP FTP `--from-url` from the URL's candidates (see
-  [Direct-mode auto-sync](#direct-mode-auto-sync)).
-
-The internal sync calls always respect the existing skip rules
-(`meeting_sync_interval`, `tdoc_list_closed_window`, `tdoc_list_sync_interval`).
-They never bypass those rules and they cannot be forced from the read
-commands. When a sync actually runs, the command prints
-`[auto-sync] <reason>`; when it is skipped, the skip reason is also printed
-with the same prefix. Sync failures are logged as warnings and do not abort
-the parent read command.
+`meeting list`, `tdoc list`, ID-keyed `tdoc show`, and `tdoc parse` can run
+best-effort internal sync when `sync.auto_sync` is true (default). Disable it
+with `doc3gpp config set sync.auto_sync false` for offline use. Internal sync
+never forces work; skips/failures do not abort the parent command.
+See [auto-sync flows](processes.md#auto-sync) for exact candidate and skip rules.
 
 ### Direct-mode auto-sync
 
-Direct-mode `tdoc parse` (`--from-path` or `--from-url`) runs the same steps
-when `sync.auto_sync` is on, before the parse:
-
-1. Extract the TDoc id from the source. `--from-path` uses the file name. A
-   3GPP FTP `--from-url` uses the TDoc-shaped candidates from the URL (the
-   basename for a file URL; a BFS of the folder up to `--max-depth` /
-   `--recursive` for a folder URL). A non-3GPP `--from-url` uses the first
-   TDoc-shaped match in the whole URL string, so an id in a directory segment
-   can trigger the sync. The type-detection specification says "file name" for
-   this step; the difference is recorded in
-   [`known-constraints.md`](known-constraints.md).
-2. Sync the TSG for that id, then its meeting list, then the meeting's TDoc
-   list, through `trigger_auto_sync`. The same skip rules as the read commands
-   apply, and failures stay warnings.
-3. Parse. `--from-path` never persists. A 3GPP FTP `--from-url` persists when a
-   `tdocs` row exists; a non-3GPP `--from-url` is parsed in memory only.
+Direct modes can also auto-sync before parsing, without changing their
+persistence contract: local/non-3GPP sources stay in memory, canonical FTP
+sources persist only with a matching stored TDoc. See
+[the source matrix](processes.md#direct-mode-and-content-reads).
 
 ## db Commands
 
-Two databases, one flag. Testcase tables (`testcases`,
-`testcase_status`, `testcase_sources`) live in a separate sqlite file
-from the main corpus: `testcase_database_url` (TOML key, or
-`DOC3GPP_TESTCASE_DATABASE_URL` env). When unset (the default) it is
-derived as a sibling of `database_url` with `_testcase` suffixed to
-the stem (`doc3gpp.db` → `doc3gpp_testcase.db`). `:memory:` main URLs
-share a memory DB; derivation from a non-sqlite main URL fails unless
-`testcase_database_url` is set explicitly.
+Three databases, one scope selector: main metadata/TDoc content/jobs, testcase,
+and specdata. Secondary SQLite URLs default to `_testcase` / `_specdata`
+siblings of the main file. See [database configuration](config.md#databases-and-http).
 
-Each `db` command takes `--scope main|testcase|all` (default `all`).
+Each `db` command takes `--scope main|testcase|specdata|all` (default `all`).
 
 ### doc3gpp db check
 
@@ -109,10 +68,8 @@ Purpose:
 Behavior:
 
 - `--scope` selects which engine(s) to connect to AND which URL(s) to
-  print: `main` prints only the main URL, `testcase` only the
-  testcase URL, `all` (default) prints both.
-- Creates an engine from DOC3GPP_DATABASE_URL (main scope) and/or the
-  resolved testcase URL (testcase scope).
+  print: one selected scope prints its URL; `all` prints all three.
+- Uses the main engine and/or resolved testcase/specdata engines as selected.
 - Executes SELECT 1 per selected engine.
 - Prints the active database URL(s) when successful.
 
@@ -145,16 +102,14 @@ Behavior:
 
 Purpose:
 
-- Recover from schema drift by wiping the SQLite database file(s) and
-  recreating from scratch. Use this after an ORM change has left the
-  live schema out of sync — Alembic is not wired up in this project, so
-  manual migrations are the norm and a mismatched schema can leave the
-  DB unusable. **Destructive: every row in every table of the selected
-  scope is wiped.**
+- Wipe selected SQLite database files and recreate them from scratch.
+  **Destructive: every row in every table of the selected scope is wiped.**
+  This is not the normal upgrade path: first check additive `db init` and
+  [schema recovery](processes.md#schema-and-recovery), and back up your data.
 
 Options:
 
-- `--scope main|testcase|all` (default `all`): which database(s) to wipe.
+- `--scope main|testcase|specdata|all` (default `all`): which databases to wipe.
 - `--yes`, `-y`: skip the interactive confirmation prompt.
 
 Behavior:
@@ -170,7 +125,7 @@ Behavior:
 - For in-memory SQLite (`sqlite:///:memory:`): skips the delete step
   (there is nothing to delete) and re-runs `create_schema(scope)` +
   `seed_defaults` (seed only when main is in scope).
-- Clears both cached SQLAlchemy engines (main + testcase) so the
+- Clears cached SQLAlchemy engines (main, testcase, specdata) so the
   subsequent `create_schema` opens fresh connections to the (now
   empty) file(s).
 
@@ -435,9 +390,9 @@ Behavior (bulk: no selector):
   Failed meetings:
     meeting_id=<id>  <ErrorClass>  <message>
   ```
-- A missing meeting row or missing FTP URL is recorded in the `Failed`
-  section and does not abort the sweep. Iteration continues so a partial
-  sweep still completes.
+- A missing meeting row is recorded in the `Failed` section and does not abort
+  the sweep. A missing FTP URL does not fail metadata sync: the TDoc list still
+  syncs, while the auxiliary file scan is skipped and noted in the outcome.
 - Empty discovery (no tracked meetings) prints
   `No stored meetings with TDocs found; nothing to sync.` and exits `0`.
 - Exit code is `1` only when **every** meeting failed (`F == N`); otherwise `0`.
@@ -858,12 +813,14 @@ Behavior:
   This path never calls `TDocCrService.extract`, downloads, or syncs. A
   missing/unreadable legacy body raises `BadParameter` with a parse hint.
 
-When `zip_files` is unknown for an eligible TDoc, refresh it with
-`doc3gpp tdoc parse --tdoc <id> --force`, or for a URL record with a matching
-TDoc type, `doc3gpp tdoc parse --from-url <url> --force`. `--force` re-parses
-existing entries and may re-download an old cached ZIP when its provenance
-cannot be verified. No bulk inventory backfill is performed; a URL record
-without a matching TDoc type has no valid inventory-refresh command.
+When `zip_files` is unknown for an eligible TDoc, refresh its current stored URL
+with `doc3gpp tdoc parse --tdoc <id> --force`. This includes existing entries and
+may re-download an old cached ZIP when its provenance cannot be verified. No bulk
+inventory backfill is performed. A single-file `--from-url <url> --force` currently
+accepts but does not forward the force flag, so it cannot guarantee a refresh of
+an already-complete extraction. This also limits forced refresh of a historical
+URL that is no longer the TDoc's current URL; see
+[direct-source limitations](known-constraints.md#extraction-and-content).
 
 Examples:
 
@@ -1136,12 +1093,11 @@ Options:
   Accepts the same rich-filter grammar as `--spec`.
 - `--uploaded-date EXPR`: filter on `uploaded_date` — see
   [Filter syntax](#filter-syntax) for accepted forms.
-- `--force`: skip the persisted `tdoc_cr_cover_page` /
-  `tdoc_extracts` short-circuit and re-render markdown (bypassing
-  the markdown cache) so every id is re-parsed from scratch.
-  The on-disk zip cache is **always** consulted first regardless of
-  `--force` — `download_tdoc_zip` keys the cache on `tdocs.ftp_url`
-  (via `derive_cache_file`) and reuses the cached bytes on a hit.
+- `--force`: include already-complete matches and reparse rather than returning
+  the persisted extraction/Markdown. A ZIP cache entry can still be reused when
+  its source provenance is verified for the requested URL. A missing or
+  unverifiable entry is downloaded again; force does not guarantee either a
+  cache-only operation or an unconditional download.
 - Every parse extracts the full content, including the TTCN correction
   bodies (`before_change` / `after_change` / `new_change`). There is no
   opt-out flag. TDocs parsed before this behaviour existed are not
@@ -1529,8 +1485,9 @@ Options:
   deterministic source order. Unavailable-on-FTP, oversized files, and
   configured archive-limit violations are skips; other errors are failures.
 - `--force`: when `--from-path` is a directory or `--from-url` is a
-  folder, overwrite existing output files. Rejected for single file
-  sources.
+  folder, overwrite existing output files. Rejected for a single local file.
+  For a single-file URL the flag is currently accepted but not forwarded to
+  extraction, so it does not force reprocessing of an already-complete source.
 - `--compact`: see "Compact output" in the format-overview section.
 
 Archive safety limits are TOML-only settings under `[tdoc_parse]`:
@@ -2049,9 +2006,8 @@ Options:
 
 - `--yes`, `-y`: skip the confirmation prompt.
 - `--scope`: which subtree to purge. One of:
-    - `markdown` (default) — only the rendered markdown sidecars
-      (cheap artefacts; the next `tdoc parse` re-renders from the
-      preserved zip blobs without re-downloading).
+    - `markdown` (default) — only the rendered Markdown archives. These include
+      the CR main body, which is not stored in SQL; see recovery below.
     - `zips` — only the 3GPP-served zip blobs (the expensive
       downloads).
     - `all` — both subtrees (the original wipe-everything behaviour).
@@ -2067,9 +2023,12 @@ Behavior:
   environment the prompt raises `Abort` and no files are deleted.
 - Set `purge_confirm = false` in the TOML config file (the
   `[cache]` table) to skip the prompt globally (CI / scripted use).
-- The on-disk artefacts referenced from `tdoc_extracts.cache_file`
-  become stale for the wiped subtree(s) — the next `tdoc parse`
-  will repopulate them.
+- Purge does not remove SQL content or make an SQL-complete TDoc pending. Normal
+  `tdoc parse` can therefore exclude a complete CR whose main archive is missing.
+  Recover the affected current TDoc with `tdoc parse --tdoc <id> --force`, or its
+  ID-based raw-extraction path (`tdoc show --tdoc <id> --format raw`). A verified
+  cached ZIP may be reused; otherwise recovery downloads it again. URL snapshot
+  reads do not repair the cache. See [cache recovery](processes.md#cache).
 - Unknown `--scope` values fail with `typer.BadParameter` and a
   non-zero exit before any files are touched.
 
@@ -2109,9 +2068,21 @@ doc3gpp tdoc search --text "annex-only handover parameter" --format json
 Stored content documents are indexed at two levels. FTS5 indexes each CR annex,
 and every WID, LS, and discussion document (main and annexes), as its own source
 row. The vector index adds labelled chunks for the same documents, capped by
-`semantic_search.max_content_chunks_per_tdoc`, next to the TDoc-level metadata
-chunks. The CR main body is not full-text indexed; its cover, change, and TTCN
-fields are.
+`semantic_search.max_content_chunks_per_tdoc` (default 16, shared across the
+TDoc's content documents), next to the TDoc-level metadata chunks. For stored
+`.ppt` and `.pptx` sources, a supplemental FTS5 sidecar indexes every extracted
+text chunk, independent of the semantic cap. It preserves the whole-document
+FTS match and parent ranking; when one document matches an expression whose
+terms occur in different chunks, the result remains but `matched_chunk` is
+`null` unless one chunk satisfies the complete expression. The CR main body is
+not full-text indexed; its cover, change, and TTCN fields are.
+
+For an existing main database, run `doc3gpp db init --scope main` and
+`doc3gpp tdoc index --rebuild` to create the presentation FTS chunk sidecar.
+Run `doc3gpp tdoc index --rebuild-embeddings` to replace legacy vectors without
+trusted chunk text; semantic rebuilding requires the configured embedding
+service. Both indexes rebuild from stored SQL content without downloading or
+reparsing ZIP files.
 
 Filters (all optional, AND-combined):
 
@@ -2184,12 +2155,21 @@ score, vector distance, RRF score, or JSON `null` for filter mode.
 `previews` is an object only for FTS5 rows and JSON `null` for the other modes.
 TDoc rows also include `type`, `status`, and `best_chunk_id`. Public rows do
 not expose `rank_*`, nested `hit`, `rrf_score`, or `min_chunk_distance` fields.
-Every TDoc result always includes `matched_documents`, an array of
-`{document_id, ftp_url, source_file, score, previews}` entries. FTS5 and hybrid
-may carry source matches (hybrid retains its FTS5 list); semantic-only and
-filter-only results serialize `[]`. The top-level `ftp_url` remains the
-canonical parent URL; use an entry's URL and exact `source_file` for a
-source-specific content read.
+Every TDoc result always includes `matched_documents`, an array with
+`document_id`, `ftp_url`, `source_file`, `score`, `previews`, and
+`matched_chunk` (`{chunk_id, chunk_index, text}` or JSON `null`). FTS5 and
+semantic-only results may carry source matches. Hybrid results union distinct
+FTS5 and vector sources, ordering vector hits by distance then document ID
+before FTS-only hits in their existing FTS order. Shared sources retain FTS
+previews and prefer a verified vector chunk, falling back to a verified FTS
+chunk. Metadata-only and filter-only results can serialize an empty array. The
+top-level `ftp_url` remains the canonical parent URL; use an entry's URL and
+exact `source_file` for a source-specific content read.
+Table, Markdown, and compact Markdown output also show each source path and
+available verified chunk text. A chunk is `null` when its text cannot be
+verified or, for presentation FTS, when no single chunk satisfies a full
+whole-document expression. Whole-document Word FTS matches can also have no
+single source chunk.
 
 The per-request `--fts5-weight`, `fts5_weight`, `--fts5-query`, `fts5_query`,
 `--sem-query`, and `sem_query` controls are removed. Hybrid weighting comes
@@ -2230,8 +2210,10 @@ Rebuild notes:
   or model change, or a missing table, drops the table and re-embeds every TDoc. Without
   `--stale-only`, `--rebuild-embeddings` always drops and rebuilds the table.
 - A stored document that cannot be decoded is logged and skipped by the rebuild
-  loop. Its old FTS rows remain, and its stored hash still matches, so
-  `--stale-only` does not retry it. Only a full `--rebuild` repairs it.
+  loop. Its old FTS rows may remain, and a matching stored hash can prevent a
+  stale-only retry. A full rebuild retries indexing but cannot repair corrupt
+  source SQL. Force-reparse the affected TDoc to restore its content, then rebuild
+  the index; see [search constraints](known-constraints.md#search-and-freshness).
 - `IndexStatus.is_stale` is true when a TDoc was uploaded after the last completed
   vector rebuild's snapshot day, when a TDoc uploaded on that day is missing from the
   index (a TDoc with no title or metadata text is never indexed and is ignored), or when
@@ -2520,15 +2502,14 @@ Options:
   `typer.BadParameter` with a `Spec unknown on the 3GPP DynaReport
   upstream` message; an unknown normalised TSG surfaces as
   `typer.BadParameter` with an `unknown TSG short name` message.
-  `--force` bypasses the per-spec skip rule in both paths.
-- --force, -f: Bypass the spec sync interval skip rule.
+  `--force` bypasses the single-spec skip rule.
+- --force, -f: Intended to bypass the spec sync interval. **Known limitation:**
+  TSG/no-selector sweeps currently do not propagate it to per-spec workers;
+  use the single-spec selector to force a particular spec.
 - --per-version-details: Fetch per-version follow-ups (ETSI PDF + CR list)
-  on every sync. **Default OFF** — `spec sync` only fetches the per-version
-  follow-ups when their cached values are missing (ETSI PDF when `pdf_url`
-  is empty; CR list when the version was updated within 90 days or `crs`
-  is empty). Pass this flag to refresh those fields for every version on
-  every run, and to backfill any previously-unset `pdf_url` / `crs`
-  values without changing the cached content of populated rows.
+  for eligible versions. **Default OFF:** no PDF/CR-list follow-ups run,
+  even for missing cached values. Enabling the flag still applies per-version
+  identifier/recency/cached-value checks; it is not an unconditional refetch.
 
 Behavior:
 
@@ -2548,8 +2529,9 @@ Behavior:
 - On success each spec's `last_synced_at` is stamped so the next
   sync can skip that spec when the interval has not yet elapsed.
 - The per-spec sync is skipped when the spec's own `last_synced_at`
-  is within `sync.spec_sync_interval` (default 24h) unless `--force`
-  is passed (no TSG-level gate).
+  is within `sync.spec_sync_interval` (default 24h). Single-spec `--force`
+  bypasses this; the sweep-force mismatch is tracked in
+  [known constraints](known-constraints.md#upstream-and-sync).
 
 Examples:
 
@@ -2557,14 +2539,14 @@ Examples:
 # Sync every distinct TSG found in the specs table.
 doc3gpp spec sync
 
-# Sync specs for a specific TSG, bypassing the skip rule.
-doc3gpp spec sync --tsg R5 --force
+# Sync specs for a specific TSG, respecting per-spec skip rules.
+doc3gpp spec sync --tsg R5
 
 # Sync a single stored spec (no list page fetch).
 doc3gpp spec sync --spec-id 36.579-5
 doc3gpp spec sync --spec-id 36.579-5 --force
 
-# Always re-fetch per-version ETSI PDF + CR list (default skips cached rows).
+# Enable per-version ETSI PDF + CR-list follow-ups (default skips all follow-ups).
 doc3gpp spec sync --tsg R5 --per-version-details
 ```
 
@@ -2948,11 +2930,20 @@ Behavior:
 - `SpecDocSearchFacade.search` applies the four mode-selection rules and
   returns flattened chunk rows shared by CLI, HTTP, and MCP.
 - JSON rows carry `chunk_id`, `score`, `search_mode`, `previews`, `spec_id`,
-  `version`, `release`, `sections`, `tables`, `chunk_index`, and `text`.
+  `version`, `release`, `source_file`, `sections`, `tables`, `chunk_index`,
+  and `text`. The exact case-preserving ZIP member path identifies the source
+  of each stored chunk.
   `search_mode` is `fts5`, `semantic`, `hybrid`, or `filter`; `score` is the
   FTS5 BM25 score, vector distance, RRF score, or `null` for filter mode.
   `previews` is an object for FTS5 and `null` otherwise. Array order is final
   rank, and per-source rank or nested hit fields are not public.
+- Human-readable output defaults to `spec_id`, `version`, `release`,
+  `source_file`, `sections`, `tables`, `chunk_index`, and `text`; customize it
+  with `--fields` or `[output.fields].spec_doc`. Explicit fields and a custom
+  field list are honored.
+- Presentation text is searchable, but it does not add specification TOC
+  entries or `sections`/`tables` metadata. Extraction does not infer image or
+  chart content and does not run OCR.
 - The per-request `--fts5-weight`, `fts5_weight`, `--fts5-query`,
   `fts5_query`, `--sem-query`, and `sem_query` controls are removed.
   Hybrid weighting comes from `[semantic_search].fts5_weight`.
@@ -3065,15 +3056,14 @@ becomes a comma-joined line.
 
 ## config Commands
 
+Command syntax is below. [Configuration](config.md) is the authoritative guide
+to discovery, source precedence, defaults, dependencies, and secrets.
+
 ### doc3gpp config path
 
 Print the config file currently in effect, or `(no config file found)`
-when none of the search locations resolve. Search order:
-
-1. `$DOC3GPP_CONFIG` (file or directory).
-2. `./doc3gpp.toml` (project-local).
-3. `$XDG_CONFIG_HOME/doc3gpp/config.toml`, falling back to
-   `~/.config/doc3gpp/config.toml`.
+when no implicit location resolves. A missing explicit `DOC3GPP_CONFIG` pin
+is an error. See [discovery](config.md#discovery-and-precedence).
 
 ### doc3gpp config show
 
@@ -3081,7 +3071,8 @@ Print the fully-resolved settings as JSON. The first line is a comment
 identifying the config source that contributed the file-derived portion
 of the result, followed by the merged view of every
 `doc3gpp.settings.schema.Settings` field after applying the precedence
-chain (CLI flags > environment variables > config file > defaults).
+chain described in [configuration](config.md#discovery-and-precedence).
+The embedding API key is redacted; other fields may contain sensitive values.
 
 Use this command to verify which file is in effect and to diff your
 TOML overrides against the built-in defaults.
@@ -3097,8 +3088,8 @@ doc3gpp config init [--target {auto,project,user}] [--force]
 Purpose:
 
 - Bootstrap a fresh TOML config file populated with the packaged
-  default template (every setting commented out so the file resolves
-  to built-in defaults). The write is atomic via a `tempfile` +
+  default template (a mixture of active defaults and commented options).
+  The write is atomic via a `tempfile` +
   `os.replace` pair, so a crashed write cannot leave a partial file
   behind. After the write completes the settings cache is cleared so
   subsequent commands see the new file.
@@ -3222,10 +3213,9 @@ Error: Invalid value: sync.meeting_sync_interval must be a valid duration
 The full set of accepted value shapes is the same as the schema
 declaration in the [packaged TOML template](../src/doc3gpp/data/doc3gpp.toml.example).
 
-Only the closed allowlist (`doc3gpp.settings.schema.ALLOWED_ENV_VARS`)
-of `DOC3GPP_*` env vars overrides TOML values at runtime. Any other
-`DOC3GPP_<SECTION>__<FIELD>` is silently ignored. Precedence:
-CLI > allowlisted env > file > defaults.
+Only allowlisted process environment variables override TOML. The dotenv source
+is broader and lower-priority; see [precedence and caveats](config.md#discovery-and-precedence).
+The CLI value `null` removes an optional key; TOML itself has no null literal.
 
 ## server Commands
 
@@ -3336,7 +3326,7 @@ doc3gpp server uninstall systemd
 ```bash
 doc3gpp db init
 doc3gpp db check
-doc3gpp db reset --yes           # destructive: wipe + recreate SQLite schema (both scopes)
+doc3gpp db reset --yes           # destructive: wipe + recreate all three SQLite scopes
 doc3gpp db reset --scope testcase --yes   # wipe only the testcase corpus
 doc3gpp tsg list
 doc3gpp meeting sync --tsg r5

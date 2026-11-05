@@ -1,351 +1,89 @@
-# Code Map
+# Code map
 
-> Last reviewed: 2026-10-28
+Use this map to find implementation entry points. Behavioral descriptions live
+in [processes](processes.md), boundaries in [architecture](architecture.md), and
+command syntax in [cli.md](cli.md). Paths below are relative to the repository.
 
-Where each public symbol lives. Use this when you want to jump from a
-class / function name straight to the source file. Long inline descriptions
-that risk going stale live in the docstring of the symbol itself; the
-table below is for navigation only.
+## Adapters and configuration
 
-## Domain models (`src/doc3gpp/models/`)
+| Symbols / concern | File |
+| --- | --- |
+| Typer apps, commands, rendering selection, direct-mode entry points | `src/doc3gpp/cli.py` |
+| CLI input filters / auto-sync | `src/doc3gpp/cli_filters.py`, `src/doc3gpp/cli_auto_sync.py` |
+| Server start/stop/status/logs/install | `src/doc3gpp/cli_server.py`, `src/doc3gpp/web/install.py` |
+| `Settings`, nested settings, `ALLOWED_ENV_VARS` | `src/doc3gpp/settings/schema.py` |
+| `find_config_file`, `load_config_data` | `src/doc3gpp/settings/config_source.py` |
+| Cached `get_settings` | `src/doc3gpp/settings/loader.py` |
+| Config bootstrap/read-modify-write | `src/doc3gpp/settings/config_writer.py` |
+| Default template / agent skill | `src/doc3gpp/data/doc3gpp.toml.example`, `src/doc3gpp/data/skills/doc3gpp/SKILL.md` |
+| `build_*` composition | `src/doc3gpp/services/factory.py` |
 
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `Meeting` | dataclass | `models/meeting.py` | Domain model for meetings (`tsg` is the owning TSG FK). |
-| `TDoc` | dataclass | `models/tdoc.py` | Domain model for TDocs. |
-| `TDocWithMeeting` | dataclass | `models/tdoc.py` | Presentation-time DTO: `TDoc` JOINed with `meetings.name`. |
-| `TDocFile` | dataclass | `models/tdoc_file.py` | Auxiliary file attached to a TDoc (revision / review / support). |
-| `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …) — slimmed: no `details` blob, no `parser_version` field. Mirrors the slim `tdoc_cr_cover_page` table 1:1. |
-| `TDocCRTTCNDetails` | dataclass | `models/tdoc_cr.py` | TTCN sidecar (six overview fields + `required_changes` list). Mirrors the new `tdoc_cr_ttcn_details` table 1:1. |
-| `TDocCRChangeDetails` | dataclass | `models/tdoc_cr_change_details.py` | Body-derived change sidecar (`clauses` + `changes`). Mirrors the new `tdoc_cr_change_details` table 1:1; non-TTCN CRs only. |
-| `TDocCRParseResult` | dataclass | `models/tdoc_cr.py` | Parser bundle: `cover: TDocCRDetails` + `ttcn: TDocCRTTCNDetails | None`. The service fans each slice out to its own repo. |
-| `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | One URL-keyed extraction parent (`cache_file`, main-member `doc_filename`, `extraction_version`, `document_count`, `skipped_sources`, timestamps, parser version). Completeness is decided by `is_complete_cr_extraction` / `is_complete_family_extraction`, not by a property on this class. |
-| `TDocDocument` / `TDocParseBundle` | dataclasses | `models/tdoc_document.py` | Per-document identity, full member path, authoritative Markdown text, and content hash (order is derived on read, main first); `TDocParseBundle` is the bundle of one parse. The pure naming helpers `sanitized_source_stem`, `source_sort_key`, and `markdown_member_name` live here too. |
-| `DirectParseResult` | dataclass | `models/tdoc_cr.py` | Outcome of `tdoc parse --from-path/--from-url` with an ordered document collection, main source, details, and persistence flags. |
-| `TDocContent` / `TDocContentDocument` | dataclasses | `models/tdoc_content.py` | SQL-first content envelope and one source body; carries extraction version/completeness without exposing ORM objects. |
-| `TDOC_CONTENT_STORES` / `TDocContentStore` / `store_for_type` / `is_eligible_type` | registry | `models/tdoc_content_families.py` | Eligible `tdocs.type` values, each store's content table, and whether the store holds the main document (CR annexes only). The single source for parse selection, the pipeline, content reads, search, and the schema. |
-| `is_complete_cr_extraction` / `is_complete_family_extraction` / `validate_content_bundle` | functions | `models/tdoc_content_families.py` | The Python completeness rule per store (its SQL mirror is in `storage/repositories/tdoc_sql.py`) and the pre-write bundle validation. |
-| `plan_content_chunks` / `_chunks` / `chunk_count` / `planned_document_keys` | functions | `models/semantic_chunking.py` | Pure chunk planning for CR annex and family content (labelled chunks, per-document cap). `chunk_count` and `planned_document_keys` plan the same chunks from stored `token_count`, without decoding Markdown, for vector status. `services/embedding/chunker.py` re-exports `plan_content_chunks` and `_chunks`. |
-| `document_id_for` | function | `models/tdoc_identity.py` | SHA-256 identity of `ftp_url` and `doc_filename`, shared by content rows, FTS, and chunk IDs. |
-| `SyncOutcome` | dataclass | `models/sync.py` | Result of `meeting sync` / `tdoc sync`: synced/skipped status, reason, and counts. |
-| `BulkSyncOutcome` | dataclass | `models/sync.py` | Result of `tdoc sync` bulk mode: per-meeting outcomes plus typed failures. |
-| `BulkSyncFailure` | dataclass | `models/sync.py` | Per-meeting failure captured during `tdoc sync` bulk mode (meeting_id, error class, reason). |
-| `Tsg` | dataclass | `models/tsg.py` | Domain model for 3GPP TSG reference records. |
-| `FieldInfo` | dataclass | `models/schema_info.py` | One DB column descriptor (`name`, `type`, `nullable`, `description`, `values`). |
-| `TableSchema` | dataclass | `models/schema_info.py` | All columns of one DB table (`table`, `fields`). |
-| `RESOURCE_SCHEMAS` | dict | `models/schema_info.py` | Static field registry keyed `tsg \| meeting \| tdoc \| wi \| spec \| spec_doc \| testcase` (23 tables, 197 fields); includes `tdoc_extracts` completeness, the four TDoc content tables, and `spec_doc_zip_inventory`. Single source of truth for CLI, HTTP, and MCP schema output. |
-| `SCHEMA_FIELDS` | list | `models/schema_info.py` | Flat row key order (`table`, `field`, `type`, `nullable`, `description`, `values`). |
-| `schema_payload` | function | `models/schema_info.py` | Flat JSON-ready rows for a resource (`nullable` bool, `values` comma-joined / `"-"`). |
-| `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to `tsg_short`). |
-| `Spec` | dataclass | `models/spec.py` | Domain model for 3GPP specifications (TS/TR). One row per dotted spec id (e.g. `36.579-5`) keyed by `spec_id`. |
-| `SpecVersion` | dataclass | `models/spec.py` | Domain model for one published version of a spec; `spec_id` FK plus `version`, `ftp_url`, `pdf_url`, `crs`, etc. `parsed` and `zip_files` are transient specdata enrichments, not `spec_versions` columns; `spec show` JSON appends `zip_files` after the existing version fields. |
-| `SpecDocSource` / `SpecDocToc` / `SpecDocChunk` | dataclasses | `models/spec_doc.py` | Spec-document download ledger, ordered TOC snapshot, and persisted chunk DTOs for one `(spec_id, version)` pair. `ChunkDraft` is the pre-persistence chunker DTO; chunks and hits carry newline-delimited combined `sections` / `tables` metadata, while TOC DTOs retain `section_no` / `title`; `SpecDocSearchFilters`, `SpecDocHit`, `SpecDocSemanticHit`, and `SpecDocBatchResult` carry search and batch outcomes. |
-| `SpecDocZipInventory` | dataclass | `models/spec_doc_zip_inventory.py` | Immutable ordered ZIP-member snapshot keyed by `(spec_id, version)`; preserves duplicates, with `()` for a known empty archive and an absent row for unknown inventory. |
-| `SpecDoc*Error` | exception hierarchy | `models/spec_doc.py` | `SpecDocUnknownSpecError`, `SpecDocUnknownVersionError`, `SpecDocTooLargeError`, and `SpecDocNoDocxError` classify resolution and parse failures. |
-| `SpecDocInventorySchemaError` | exception | `models/spec_doc_zip_inventory.py` | Indicates that the specdata inventory table is missing; tells callers to run `doc3gpp db init --scope specdata`. |
-| `TDocShowRecord` | dataclass | `models/tdoc_show.py` | Composite render record for `tdoc show --tdoc`: `TDoc` + slim cover + optional TTCN + `extracted_at` + `TDocFile` list. |
-| `TDocShowRecordByUrl` | dataclass | `models/tdoc_show.py` | URL-anchored variant of `TDocShowRecord` for `tdoc show --ftp-url`. |
-| `TDocShowRepos` | dataclass | `models/tdoc_show.py` | Bundle of repos (`tdoc`, `cr`, `cr_ttcn`, `cr_change_details`, `file`) consumed by `TDocShowRecord.from_tdoc_id`. |
-| `TestCase` | dataclass | `models/testcase.py` | RAN5 testcase header (`(testcase_id, group)` composite identity + `title`, `ats`, `feature`, `release`, `wis`, `spec`). |
-| `TestCaseStatus` | dataclass | `models/testcase.py` | One `(testcase_id, group, path)` status triple (`gcf_ptcrb`, `ttcn_status`); single-path groups use the literal path `'default'`. |
-| `TestCaseWithStatuses` | dataclass | `models/testcase.py` | List-view DTO: `TestCase` + `statuses: list[TestCaseStatus]` (nested per-path objects). |
-| `TestCaseDetail` | dataclass | `models/testcase.py` | Detail-view DTO: `TestCase` + `statuses: list[TestCaseStatus]`. |
-| `TestCaseSource` | dataclass | `models/testcase.py` | Sync-ledger row for one status file (`filename` PK + `year`, `week`, `revision`, `downloaded_at`, `parsed_at`, counts). |
-| `TestcaseSourceNotFoundError` | exception | `models/testcase.py` | Raised when no status-file name matches the History grammar (`LookupError`). |
-| `TestcaseWorkbookNotFoundError` | exception | `models/testcase.py` | Raised when the status zip holds no `*.xlsx` member (`ValueError`). |
+## Metadata sync and domain parsing
 
-## Repository contracts (`src/doc3gpp/repository/`)
+| Concern | Entry points |
+| --- | --- |
+| `MeetingService`, `parse_3gpp_calendar` | `src/doc3gpp/services/meetings_service.py`, `src/doc3gpp/parsers/calendar_parser.py` |
+| `TDocService`, `TDocSyncCoordinator`, `TDocFileService` | `src/doc3gpp/services/tdoc_service.py`, `src/doc3gpp/services/tdoc_sync_coordinator.py`, `src/doc3gpp/services/tdoc_file_service.py` |
+| TDoc portal/FTP list parsing | `src/doc3gpp/parsers/tdoc_parser.py`, `src/doc3gpp/parsers/tdoc_file_parser.py` |
+| `SpecService`, detail/bootstrap parsing | `src/doc3gpp/services/spec_service.py`, `src/doc3gpp/scraping/spec_source.py`, `src/doc3gpp/parsers/spec_parser.py` |
+| WI service/parser | `src/doc3gpp/services/wi_service.py`, `src/doc3gpp/parsers/wi_parser.py` |
+| `TestCaseService`, workbook/history parsing | `src/doc3gpp/services/testcase_service.py`, `src/doc3gpp/parsers/testcase_parser.py`, `src/doc3gpp/scraping/testcase_source.py` |
+| HTTP transport / cache | `src/doc3gpp/scraping/client.py`, `src/doc3gpp/scraping/cache.py` |
 
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `MeetingRepository` | Protocol | `repository/protocols.py` | Contract for meeting storage. |
-| `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage; `get_by_id` resolves canonical id strings; `get_by_ftp_url` (1:1 invariant, `LIMIT 1`) anchors the new `tdoc show --ftp-url` selector on the URL. |
-| `TDocFileRepository` | Protocol | `repository/protocols.py` | Contract for `tdoc_files` storage; `get_by_ftp_url` (URL-unique-indexed) is the new URL-keyed read used by `tdoc show --ftp-url`. |
-| `TDocCrDetailRepository` | Protocol | `repository/protocols.py` | Contract for the slim `tdoc_cr_cover_page` table and URL-keyed extraction-metadata reads. |
-| `TDocContentRepository` | Protocol | `repository/protocols.py` | Store-keyed content reads (`list_documents`, `get_document`) plus atomic `replace_cr_bundle` (CR sidecars, parent, annex rows) and `replace_family_bundle` (parent and family rows) per immutable URL. |
-| `TDocCrTTCNDetailRepository` | Protocol | `repository/protocols.py` | Contract for the new `tdoc_cr_ttcn_details` TTCN sidecar (one row per immutable `ftp_url`). |
-| `TsgRepository` | Protocol | `repository/protocols.py` | Contract for TSG reference storage. Spec sync throttling is **not** in this Protocol — the per-spec skip rule lives on `SpecRepository` / `SpecORM.last_synced_at` and is enforced per-worker inside `SpecService.sync` and per-call inside `SpecService.sync_spec`. |
-| `WiRepository` | Protocol | `repository/protocols.py` | Contract for WI storage; upsert keyed by `(wi_id, tsg_short)`. |
-| `SpecRepository` | Protocol | `repository/protocols.py` | Contract for main-database spec storage. `upsert(spec)` writes the header row; `upsert_versions(versions)` writes per-version rows; `list(filters)` returns filtered header rows; `list_distinct_tsgs()` returns the distinct TSGs present in the `specs` table (used by the no-selector `spec sync` fallback); `get(spec_id)` / `list_versions(spec_id)` are the lookups used by `spec show`. Parsed status is not a main-table column; list filtering and output enrichment use the separate specdata ledger. |
-| `SpecParsedStatusRepository` | Protocol | `repository/protocols.py` | Read-only contract for parsed spec-document versions from the separate specdata database; reads non-null `spec_doc_sources.parsed_at` rows for list/show enrichment and pre-pagination filtering. |
-| `SpecDocZipInventoryRepository` | Protocol | `repository/protocols.py` | Contract for single and batched inventory reads plus upsert, keyed by `(spec_id, version)` in specdata. |
-| `SpecDocRepository` | Protocol | `repository/protocols.py` | Contract for specdata source/TOC/chunk storage: download and parse ledger (including `spec_doc_sources.parsed_at`), compressed TOC snapshots, pair-level replacement, and filtered chunk reads. |
-| `SpecDocSearchRepository` / `SpecDocVectorRepository` | Protocols | `repository/protocols.py` | FTS5 and sqlite-vec contracts for spec-document indexing, rebuild cursors, chunk search, and version-scoped KNN. |
-| `TestCaseRepository` | Protocol | `repository/protocols.py` | Contract for testcase storage: `upsert_many` (keyed by `(testcase_id, group)`), `replace_statuses_many` (one transaction; delete-then-bulk-insert per `(testcase_id, group)`; singular `replace_statuses` remains as a single-key wrapper), `list` (text cols + any-path `status`/`gcf_status` `EXISTS` correlated on both key cols), `get` / `list_statuses` (optional group; unscoped `get` returns the lexically-first group) / `list_statuses_many` (batched, `PATH_RANK`-sorted per key), `get_source` / `record_download` / `record_parsed` (sync ledger). |
+## TDoc extraction and content
 
-## Services (`src/doc3gpp/services/`)
+| Concern | Entry points |
+| --- | --- |
+| `TDocPipeline`, `PipelineRuntime`, permits/outcomes | `src/doc3gpp/services/tdoc_pipeline.py`, `src/doc3gpp/services/pipeline_runtime.py` |
+| CR preparation/persistence | `src/doc3gpp/services/tdoc_cr_service.py` |
+| WID/LS/discussion preparation/persistence | `src/doc3gpp/services/tdoc_family_service.py` |
+| `TDOC_CONTENT_STORES`, routing/completeness | `src/doc3gpp/models/tdoc_content_families.py` |
+| Direct source validation/extraction | `src/doc3gpp/parsers/direct_extractor.py` |
+| ZIP member selection/inventory/conversion | `src/doc3gpp/parsers/tdoc_zip.py`, `src/doc3gpp/parsers/tdoc_family_main.py`, `src/doc3gpp/parsers/tdoc_zip_convert.py` |
+| Shared Office conversion processes | `src/doc3gpp/services/docx_convert_pool.py` |
+| Word / presentation conversion | `src/doc3gpp/parsers/word_converter.py`, `src/doc3gpp/parsers/docx_converter.py`, `src/doc3gpp/parsers/presentation_converter.py` |
+| Cover/TTCN/body-change extraction | `src/doc3gpp/parsers/cr/cr_parsers.py`, `src/doc3gpp/parsers/cr/ttcn_functions.py`, `src/doc3gpp/parsers/cr/body_changes.py` |
+| SQL-first content retrieval | `src/doc3gpp/services/tdoc_content_service.py` |
+| Atomic extraction/content writes | `src/doc3gpp/storage/repositories/tdoc_content_sql.py`, `src/doc3gpp/storage/repositories/tdoc_cr_sql.py` |
+| Inventory / TTCN / body sidecars | `src/doc3gpp/storage/repositories/tdoc_zip_inventory_sql.py`, `src/doc3gpp/storage/repositories/tdoc_cr_ttcn_sql.py`, `src/doc3gpp/storage/repositories/tdoc_cr_change_details_sql.py` |
+| Detail DTOs and output | `src/doc3gpp/models/tdoc_show.py`, `src/doc3gpp/storage/export.py` |
 
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `MeetingService` | class | `services/meetings_service.py` | Meeting sync + list orchestration. |
-| `TDocService` | class | `services/tdoc_service.py` | TDoc sync + list orchestration. |
-| `TDocSyncCoordinator` | class | `services/tdoc_sync_coordinator.py` | Cross-service orchestration for `tdoc sync`. Exposes `sync_for_meeting_id`, `sync_for_meeting_name`, and `sync_all_tracked_meetings` (bulk). |
-| `TDocFileService` | class | `services/tdoc_file_service.py` | Auxiliary TDoc-file sync. |
-| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction; converts every supported member, applies CR/TTCN/body-change parsing only to the unique main source, stores CR annexes atomically, and routes WID, LS, and discussion TDocs to `TDocFamilyService`. Also exposes direct URL/bytes and batch paths. |
-| `TDocFamilyService` / `PreparedFamilyExtract` / `FamilyExtractResult` | class / dataclasses | `services/tdoc_family_service.py` | WID, LS, and discussion extraction: reuse or download the ZIP, select the main (`select_main_member`), convert with tolerant annexes, write the archive, and persist through `replace_family_bundle` on the serialized writer. `FamilyExtractResult.complete` uses the family rule. |
-| `decide_known_type` / `decide_direct_type` / `sniff_content_family` | functions | `services/tdoc_type_detection.py` | Direct-mode type decision: a known `tdocs.type`, else sniffing of the main document (WID, LS, and discussion markers, then the structural CR check). |
-| `parse_selection_kwargs` / `exact_tdoc_id` | functions | `services/tdoc_parse_selection.py` | Default eligible types (CR plus the families); an explicit `--type` is intersected with them; on the CLI an exact id with no type skips the eligibility filter. Shared by the CLI, web, and MCP. |
-| `TDocNotYetOnFTPError` / `TDocTypeSkippedError` / `TDocTypeUnsupportedError` | exceptions | `services/tdoc_errors.py` | Skip and failure errors shared by the CR and family services; the pipeline classifies them as skipped or failed. |
-| `TDocContentService` | class | `services/tdoc_content_service.py` | SQL-first all-source or exact-source retrieval by TDoc ID/ZIP URL (the CR main is read from the archive), legacy incomplete-cache fallback, shared JSON serializer, and source-aware Markdown renderer. An ineligible type raises `TDocContentIneligibleError`. |
-| `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; exposes `build_tsg_url`. |
-| `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters. |
-| `SpecService` | class | `services/spec_service.py` | Spec sync + list orchestration. `sync(tsg, force=False, per_version_details=False)` fetches the DynaReport list page once, then fans out across per-spec detail pages in a thread pool (capped at `min(32, cpu+4)` workers), runs ETSI PDF + CR-list follow-ups inside each worker (gated on recency / emptiness by default; `per_version_details=True` always re-fetches both for every version), and honours the **per-spec** `specs.last_synced_at` skip rule — each per-worker `_sync_one_spec` short-circuits specs whose own `last_synced_at` is within `Settings.sync.spec_sync_interval` (no TSG-level gate) and stamps the spec's own `last_synced_at` on a successful re-sync. `sync_spec(spec_id, force=False, per_version_details=False)` syncs a single stored spec (recovers its TSG, fetches only that spec's detail page + versions — no list page; honours the same per-spec `last_synced_at` skip rule). `list_distinct_tsgs()` returns the distinct TSGs in the `specs` table for the no-selector fallback. `list_recent` uses the main repository for cached headers, transiently enriches them through `SpecParsedStatusRepository` from non-null `spec_doc_sources.parsed_at` rows in the separate specdata database, and applies `parsed=true|false` before pagination (uninitialized/missing status storage is an empty source). `get` / `list_versions` are the lookups used by `spec show`; `list_versions` batch-enriches selected rows with transient `parsed` and `zip_files` values from specdata without persisting either in the main schema; the CLI consumes `zip_files` for per-version detail output. |
-| `TestCaseService` | class | `services/testcase_service.py` | Testcase sync + list orchestration. `sync(*, force=False, on_progress=None)` selects the latest History zip, skips when its `testcase_sources` row already carries `parsed_at` (file-identity skip rule), otherwise downloads → `record_download` (before parsing) → parse → `upsert_many` + one `replace_statuses_many` transaction → `record_parsed`. Progress events: `listing` / `downloaded` / `parsed`. `list_recent` returns headers each with a nested `statuses` list of `TestCaseStatus` rows; `get(id, group=None)` returns `TestCaseDetail | None` (unscoped = lexically-first group); `get_all(id)` returns every stored group as `list[TestCaseDetail]`. |
-| `SpecDocService` | class | `services/spec_doc_service.py` | Fetches the numeric-newest downloadable or explicitly selected spec-version zip, converts and orders all `.docx` and `.doc` files, writes TOC/chunks/cache sidecars below the dedicated `~/.cache/doc3gpp/specs` root by default, enforces immutable parse skips, and returns batch success/skip/failure buckets. The TDoc cache remains `~/.cache/doc3gpp/tdocs`. |
-| `DocxConvertPool` | class | `services/docx_convert_pool.py` | Bounded spawn-context process pool for `.docx` / `.doc` member conversion, sized by `[pipeline] docx_workers` (`0` and `1` convert in-process). The executor is created on first use and shared by all callers; each `convert_members` call keeps at most `2 × workers` submissions outstanding. A dead worker fails that call's outstanding members with `DocxConvertPoolError`, and the next call starts a fresh executor. `close()` idempotently detaches and shuts down the current executor; a later call may lazily create a fresh one. |
-| `SpecDocSearchService` | class | `services/spec_doc_search_service.py` | FTS5 search/index orchestration for spec-document chunks, including BM25 search over `(text, sections, tables, spec_id, version, release)`, plural metadata filters, version rebuild cursors, stale-only rebuilds, and status. |
-| `SpecDocSemanticService` / `rrf_merge` | class / function | `services/spec_doc_semantic_service.py` | Optional chunk-level vector search and hybrid FTS5/vector reciprocal-rank fusion; pure vector search is used when no FTS5 query is supplied. |
-| `TestCaseProgressFn` | alias | `services/testcase_service.py` | `Callable[[str, dict], None]` progress callback for `TestCaseService.sync`. |
-| `build_*` | helpers | `services/factory.py` | Factory used by the CLI to wire repo / service instances. `build_spec_service` injects the main `SQLAlchemySpecRepository`, separate-specdata parsed-status and ZIP-inventory repositories, and the `sync.spec_sync_interval` setting; status and inventory are transient service enrichments consumed by SDK and CLI callers, not main-schema columns. `build_testcase_service` returns `TestCaseService(SQLAlchemyTestCaseRepository())`. |
+## Spec documents and search
 
-## Scraping, caching, parsers (`src/doc3gpp/scraping/`, `src/doc3gpp/parsers/`)
+| Concern | Entry points |
+| --- | --- |
+| `SpecDocService`, fetch/parse/persist/content reads | `src/doc3gpp/services/spec_doc_service.py`, `src/doc3gpp/scraping/spec_doc_source.py` |
+| TOC/chunks/presentations | `src/doc3gpp/models/spec_doc.py`, `src/doc3gpp/parsers/spec_doc.py`, `src/doc3gpp/parsers/spec_doc_chunker.py` |
+| Specdata relational repositories | `src/doc3gpp/storage/repositories/spec_doc_sql.py` |
+| Shared chunking / public search shapes | `src/doc3gpp/models/semantic_chunking.py`, `src/doc3gpp/models/search.py`, `src/doc3gpp/models/semantic_search.py`, `src/doc3gpp/models/unified_search.py` |
+| Unified facade / index orchestration | `src/doc3gpp/services/tdoc_search_facade.py`, `src/doc3gpp/services/tdoc_index_service.py`, `src/doc3gpp/services/spec_doc_search_facade.py`, `src/doc3gpp/services/spec_doc_index_service.py` |
+| FTS5 services | `src/doc3gpp/services/search_service.py`, `src/doc3gpp/services/spec_doc_search_service.py` |
+| Vector services / remote embedder | `src/doc3gpp/services/semantic_search_service.py`, `src/doc3gpp/services/spec_doc_semantic_service.py`, `src/doc3gpp/services/embedding/remote_embedder.py` |
+| FTS5 and presentation sidecars | `src/doc3gpp/storage/repositories/search_sql.py`, `src/doc3gpp/storage/repositories/tdoc_presentation_search_sql.py`, `src/doc3gpp/storage/repositories/spec_doc_search_sql.py` |
+| Vector SQL / provenance | `src/doc3gpp/storage/repositories/vector_sql.py` |
 
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `HISTORY_URL` / `list_history_files` / `select_latest` / `parse_status_filename` / `fetch_testcase_zip` | constant / functions | `scraping/testcase_source.py` | RAN5 TTCN status History transport (network only): History-folder URL, filename-grammar parse + `(year, week, revision)` ordering, zip download. |
-| `SHEET_TO_GROUP` / `PATH_RANK` / `STATUS_PAIRS` / `FIXED_SPEC` / `extract_workbook` / `parse_testcase_workbook` | constants / functions | `parsers/testcase_parser.py` | Pure workbook parser: sheet→group map, path-rank order, `(gcf_idx, ttcn_idx, path)` pairs per group, fixed-spec overrides (`5G`→`38.523-1`, `LTE`→`36.523-1`), zip→xlsx extraction, header-validated parse with per-`(testcase_id, group)` identity (same id on several sheets keeps one row per group). |
-| `ScraperClient` | class | `scraping/client.py` | HTTP transport with retry / backoff via `httpx`. |
-| `fetch_calendar` | function | `scraping/calendar_source.py` | Fetch DynaReport meeting HTML. |
-| `fetch_tdoc_files_from_meeting_ftp` | function | `scraping/ftp_source.py` | Scan a meeting's FTP subfolders for auxiliary TDoc files. |
-| `fetch_tdocs_from_portal` | function | `scraping/portal_source.py` | Download a meeting's TDoc-list XLSX from `GenerateDocumentList.aspx`. |
-| `fetch_wis` | function | `scraping/wi_source.py` | Fetch DynaReport WI list HTML for a TSG. |
-| `build_spec_list_url` / `build_spec_detail_url` | functions | `scraping/spec_source.py` | DynaReport URL builders for the spec list page (`?code=Spec-<tsg>.htm`) and per-spec detail page (`?code=<id-no-dot>.htm`). |
-| `fetch_spec_list` / `fetch_spec_detail` | functions | `scraping/spec_source.py` | Fetch DynaReport spec list / detail HTML. |
-| `resolve_spec_doc_version` / `fetch_spec_doc_zip` | functions | `scraping/spec_doc_source.py` | Resolve a stored `SpecVersion` by newest non-empty `.zip` URL (or release/exact version) and download its immutable zip; network transport only. |
-| `fetch_etsi_pdf_text` / `fetch_cr_list` | functions | `scraping/spec_source.py` | Conditional follow-ups: ETSI deliverable HTML (`wki_id`) and per-version CR list HTML (`version_id`). Both are gated in `SpecService` on recency / emptiness. |
-| `download_tdoc_zip` / `get_tdoc_zip_url` | functions | `scraping/tdoc_zip_source.py` | Resolve TDoc id → 3GPP URL + on-disk zip via `TDocCache`. `download_tdoc_zip` accepts an optional `cache_key_override` so the direct-parse path can key the zip cache on the original filename (D10 fix). |
-| `derive_cache_file` | function | `scraping/cache_keys.py` | Derive unified cache filename `<stem>-<md5(ftp_url)>.zip` from a 3GPP relative FTP URL. Used for both zip and markdown cache keys. |
-| `TDocCache` / `CacheStatus` | class | `scraping/cache.py` | On-disk `zips/` + `markdown/` cache with FIFO eviction. |
-| `parse_3gpp_calendar` | function | `parsers/calendar_parser.py` | DynaReport HTML → `Meeting` list. |
-| `parse_title` | function | `parsers/html_parsers.py` | Pull the `<title>` out of a DynaReport HTML page. |
-| `clean_whitespace` / `normalize_ftp_path` / `build_ftp_url` | functions | `parsers/normalizers.py` | Shared text / URL normalisers used by the spec + tdoc parsers. |
-| `normalise_release` / `release_from_version` | functions | `parsers/spec_release.py` | Spec release-string normalisation (e.g. `Rel-18` ↔ `18.x.y`). |
-| `classify_tdoc_filename` / `parse_tdoc_files_from_listing` | functions | `parsers/tdoc_file_parser.py` | Classify FTP-listing filenames into `revision` / `review` / `support` and parse the per-file metadata. |
-| `read_tdoc_sheet` | function | `parsers/tdoc_parser.py` | TDoc-list XLSX → `TDoc` list. |
-| `parse_3gpp_wis` | function | `parsers/wi_parser.py` | WI DynaReport HTML → `Wi` list (extracts `wi_id`, `acronym`, `release`, `name`). |
-| `parse_spec_list` | function | `parsers/spec_parser.py` | DynaReport list HTML → `Spec` header rows (one per `<tr>` in the spec table). |
-| `parse_spec_detail` | function | `parsers/spec_parser.py` | DynaReport detail HTML → `(Spec, list[SpecVersion])` (header + per-version rows from the version table). |
-| `extract_etsi_pdf_url` | function | `parsers/spec_parser.py` | ETSI deliverable HTML → "download as PDF" URL (consumed by `SpecService._maybe_fetch_etsi_pdf`). |
-| `extract_cr_tdocs` | function | `parsers/spec_parser.py` | Per-version CR list HTML → `list[str]` of TDoc ids (consumed by `SpecService._maybe_fetch_crs`). |
-| `as_docx_bytes` | function | `parsers/word_converter.py` | `.docx` pass-through; `.doc` normalization via optional LibreOffice Writer with isolated temporary directory/profile and a configurable timeout (`word_conversion.timeout_seconds`, default 300, process environment override `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS`). Original filenames are diagnostic only. |
-| `convert_document_to_markdown` / `convert_document_to_blocks` | functions | `parsers/docx_converter.py` | python-docx conversion of `.docx` and normalized legacy `.doc`; the block path preserves headings, paragraphs, tables, section numbers, and table captions for spec-doc chunking. |
-| `DocxMemberPool` Protocol / `InlineDocxPool` | Protocol / class | `parsers/docx_converter.py` | `convert_members(kind, members)` returns one outcome per member, in input order: the converted value or the exception raised for it. `InlineDocxPool` is the in-process default used when no pool is injected. |
-| `DocxConvertPoolError` | exception | `parsers/docx_converter.py` | Infrastructure failure from a broken worker pool. Re-exported by `services/docx_convert_pool.py`; callers re-raise it instead of treating the member as a skipped document. |
-| `DOCX_WORKERS` | dict | `parsers/docx_converter.py` | Maps `"blocks"` and `"markdown"` to the two top-level worker functions that each spawned pool process dispatches to. |
-| `enumerate_docx_members` / `build_markdown_archive` / `read_markdown_archive` / `document_id_for` | functions | `parsers/tdoc_zip.py` | Safe supported-member enumeration, stable source IDs, and versioned multi-entry Markdown ZIP/manifest helpers. |
-| `select_main_member` / `member_names` | functions | `parsers/tdoc_family_main.py` | Main-member selection by TDoc number: one candidate, a unique exact `<tdoc_id>.docx` or `<tdoc_id>.doc` among several, or `TDocMainDocumentError` for none/ambiguous. |
-| `convert_tdoc_zip` / `convert_direct_payload` / `TDocZipConversion` | functions / dataclass | `parsers/tdoc_zip_convert.py` | Conversion of every `.docx` / `.doc` member: main first, tolerant annexes (failures listed in `skipped_sources`), zero-text documents stored as empty. No SQL or network; legacy conversion uses temporary files. |
-| `extract_docx_from_zip` | function | `parsers/cr/helpers.py` | Legacy single-member wrapper around the TDoc ZIP enumeration primitive. |
-| `list_spec_docx` / `order_spec_files` / `extract_spec_toc` | functions | `parsers/spec_doc.py` | List `.docx` and `.doc` zip members, order split spec files by first section/TOC rules while preserving alphanumeric identifiers such as `7.2A.3A`, and build the ordered TOC/file map. |
-| `chunk_blocks` | function | `parsers/spec_doc_chunker.py` | Pure paragraph/sentence/table-row chunker using semantic token budgets plus the spec-doc character ceiling; carries newline-delimited combined `sections` / `tables` and source-file metadata. |
-| `parse_cr_details` | function | `parsers/cr_parser.py` | Markdown → `TDocCRDetails` (cover-page, optional TTCN overview, optional corrections). |
-| `is_3gpp_ftp_url` / `normalize_3gpp_ftp_url` / `validate_tdoc_ftp_url` / `direct_parse_bytes` / `derive_zip_cache_key` / `extract_tdoc_id_from_filename` | functions | `parsers/direct_extractor.py` | Helpers for the `tdoc parse --from-path/--from-url` path. `direct_parse_bytes` returns an ordered document bundle after one-main selection; URL validation covers canonical HTTPS, file/folder, and TDoc-basename policy. |
-| `TDocParser` Protocol / `TDocParserRegistry` / `build_default_registry` | Protocol / class / function | `parsers/tdoc_parsers.py` | `TDocParser.parse()` returns a `TDocCRParseResult` (cover + optional TTCN sidecar). `build_default_registry` registers `TTCNCRParser` before the generic `CRParser` so TTCN CRs route to the overview + corrections parser and everything else falls through. |
-| `CRParserBase` / `CRParser` / `TTCNCRParser` | classes | `parsers/cr/cr_parsers.py` | Concrete parser implementations. `CRParserBase.parse()` returns `TDocCRParseResult`; `TTCNCRParser` populates the sidecar from the TTCN overview + corrections section payloads; `CRParser` always emits `ttcn=None`. |
-| `ttcn_functions` module | module | `parsers/cr/ttcn_functions.py` | Regex-driven helpers for the `tdoc_cr_ttcn_details.changed_functions` aggregate: `extract_module_basename` (handles Unix paths, Windows paths, bare basenames), `extract_function_name` (matches `f_`/`fl_`/`fx_`/`a_`/`tsc_`/`cs_`/`cr_`/`crs_`/`cas_`/`car_`/`cds_`/`cdr_`/`cms_`/`cmr_`/`cads_` prefixes with a `*_type` fallback), and the thin aggregator `extract_changed_functions` that returns a sorted, deduplicated `list[str]` of `"<module_basename>.<function_name>"` entries derived from `required_changes`. Partial-extraction markers (`"<module>."` trailing-dot, `".<function>"` leading-dot) cover the cases where one regex returns `None`; entries where both regexes return `None` are dropped. Consumed by `CRParserBase.parse()` when building the `TDocCRTTCNDetails` sidecar. |
-| `extract_module_basename` | function | `parsers/cr/ttcn_functions.py` | Rightmost-alphanumeric-run regex with optional `\.ttcn` suffix; returns the module basename or `None` for blank / non-alphanumeric input. |
-| `extract_function_name` | function | `parsers/cr/ttcn_functions.py` | Regex match against the TTCN function-name prefix set (with a `*_type` fallback); strips a trailing non-alphanumeric boundary (e.g. ` (NR)`); returns `None` when neither group matches. |
-| `extract_changed_functions` | function | `parsers/cr/ttcn_functions.py` | Aggregator: walks `required_changes`, applies the 4-form contract — both extract → `"<module>.<function>"`, only module → `"<module>."` (trailing-dot sentinel), only function → `".<function>"` (leading-dot sentinel), neither → drop — deduplicates, and returns `sorted(set(...))`. |
-| `extract_body_changes` | function | `parsers/cr/body_changes.py` | Pure function: line-by-line scan of the converted markdown body to capture change blocks and clause numbers. |
-| `CRCoverPageParser` | class | `parsers/cr/cover_page.py` | Cover-page markdown → `TDocCRDetails` (spec, cr_num, release, source, title, …). |
-| `is_cr_header_present` / `is_ttcn_tdoc` | functions | `parsers/cr/header.py` | `is_cr_header_present` probes the markdown body for the CR header marker; `is_ttcn_tdoc` decides whether a TDoc id is a TTCN CR (drives the `tdoc_cr_ttcn_details` sidecar writes). |
-| `TTCNOverviewParser` / `TTCNCorrectionsParser` | classes | `parsers/cr/ttcn_sections.py` | TTCN-specific parsers for the overview block and the per-correction table. |
+## Persistence and web
 
-## Storage (`src/doc3gpp/storage/`)
+| Concern | Entry points |
+| --- | --- |
+| Repository Protocols / domain DTOs | `src/doc3gpp/repository/protocols.py`, `src/doc3gpp/models/` |
+| ORM/base/engines/bootstrap | `src/doc3gpp/storage/db/models.py`, `src/doc3gpp/storage/db/session.py`, `src/doc3gpp/storage/db/migrate.py` |
+| Secondary metadata bases | `src/doc3gpp/storage/db/testcase_base.py`, `src/doc3gpp/storage/db/specdata_base.py` |
+| Schema registry / compression | `src/doc3gpp/models/schema_info.py`, `src/doc3gpp/storage/compression.py` |
+| App/lifespan/MCP mount | `src/doc3gpp/web/app.py` |
+| `WebState`, `ServiceContainer`, `JobWorkerHandle` / dependencies | `src/doc3gpp/web/state.py`, `src/doc3gpp/web/deps.py` |
+| HTTP adapters / shared output / errors | `src/doc3gpp/web/routes/`, `src/doc3gpp/web/render.py`, `src/doc3gpp/web/errors.py` |
+| MCP tool registration and payloads | `src/doc3gpp/web/mcp_server.py` |
+| Job kinds/SQL/worker/handlers | `src/doc3gpp/models/jobs.py`, `src/doc3gpp/storage/repositories/jobs_sql.py`, `src/doc3gpp/web/workers/job_worker.py`, `src/doc3gpp/web/workers/handlers.py` |
+| Templates / HTMX / sync hub | `src/doc3gpp/web/templates/`, `src/doc3gpp/web/filters.py`, `src/doc3gpp/web/static/js/sync_hub.js` |
 
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `Base` | declarative base | `storage/db/base.py` | SQLAlchemy `DeclarativeBase`. |
-| `TestCaseBase` | declarative base | `storage/db/testcase_base.py` | SQLAlchemy `DeclarativeBase` owning the three testcase ORMs (`testcases`, `testcase_status`, `testcase_sources`). |
-| `SpecDataBase` | declarative base | `storage/db/specdata_base.py` | SQLAlchemy `DeclarativeBase` owning the separate spec-document corpus database. |
-| ORM classes | `Mapped[]` | `storage/db/models.py` | `TDocORM`, `MeetingORM`, `TsgORM`, `WiORM`, `TDocFileORM`, slim `TDocCrDetailOrm`, `TDocCrTtcnDetailOrm`, `TDocExtractOrm` (URL-keyed parent with cache pointer, version, count, and skipped sources), `TDocCrAnnexOrm` / `TDocWidContentOrm` / `TDocLsContentOrm` / `TDocDiscussionContentOrm` (per-type content rows sharing `_TDocContentRowMixin`), plus spec and specdata ORM classes. |
-| `get_engine` / `get_session_factory` | functions | `storage/db/session.py` | Cached main engine + session factory. |
-| `get_testcase_engine` / `get_testcase_session_factory` / `resolve_testcase_database_url` | functions | `storage/db/session.py` | Cached testcase engine + session factory; sibling-derivation resolver for `testcase_database_url`. |
-| `get_specdata_engine` / `get_specdata_session_factory` / `resolve_specdata_database_url` | functions | `storage/db/session.py` | Cached specdata engine/session factory and sibling-derivation resolver for `specdata_database_url`; defaults to `<main-stem>_specdata.db`. |
-| `SpecDocSourceORM` / `SpecDocTocORM` / `SpecDocChunkORM` | ORM classes | `storage/db/models.py` | Separate specdata relational tables for the download ledger, compressed TOC snapshots, and chunk metadata/text; no cross-database FKs. |
-| `SpecDocZipInventoryORM` | ORM class | `storage/db/models.py` | Separate specdata inventory table keyed by `(spec_id, version)`; stores the ordered ZIP member-name snapshot independently of the ZIP cache and source ledger. |
-| `create_schema` | function | `storage/db/migrate.py` | `create_schema(scope)` — migrates TDoc extraction completeness and the FTS5 layout before creating main tables; creates testcase/specdata schemas and their search sidecars by scope. |
-| `compress_json` / `decompress_json` | functions | `storage/compression.py` | Shared gzip JSON helpers used by both `SQLAlchemyTDocCrRepository` and `SQLAlchemyTDocCrTtcnRepository` for any binary JSON detail column (currently the TTCN sidecar's `required_changes`). `decompress_json` is tolerant — `None` / empty / gzip / JSON / Unicode errors all resolve to `None` plus a warning; legacy uncompressed blobs decode transparently. |
-| `SQLAlchemyMeetingRepository` | class | `storage/repositories/meeting_sql.py` | SQL impl of `MeetingRepository`. |
-| `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of `TDocRepository`. The list query applies eligibility, the `parsed` filter (`complete_extraction_predicate`, the SQL mirror of the completeness rules), and computes `parsed` and `document_count` per row (`document_count` is `null` when not parsed). |
-| `SQLAlchemyTDocFileRepository` | class | `storage/repositories/tdoc_file_sql.py` | SQL impl of `TDocFileRepository`. |
-| `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of cover-page and extraction-metadata reads; aggregate bundle writes are owned by `SQLAlchemyTDocContentRepository`. |
-| `SQLAlchemyTDocContentRepository` | class | `storage/repositories/tdoc_content_sql.py` | Atomic URL-owned replacement of the CR sidecars, parent, and annex rows (`replace_cr_bundle`) and of the family parent and rows (`replace_family_bundle`) across the four content tables; store-keyed reads (`list_documents`, `get_document`). |
-| `tdoc_document_sources_sql` | function | `storage/repositories/tdoc_document_sources.py` | The union SQL over the four content tables that feeds FTS5 and freshness. |
-| `SQLAlchemyTDocCrTtcnRepository` | class | `storage/repositories/tdoc_cr_ttcn_sql.py` | SQL impl of `TDocCrTTCNDetailRepository` for the new `tdoc_cr_ttcn_details` sidecar. One row per immutable `ftp_url`; six overview columns + a gzip-compressed `required_changes` blob. Lazy-bootstrap (`_ensure_table_exists`) catches `OperationalError "no such table"` and runs `Base.metadata.create_all` once per process. |
-| `SQLAlchemyTDocCrChangeDetailsRepository` | class | `storage/repositories/tdoc_cr_change_details_sql.py` | SQL impl of the body-change sidecar. |
-| `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of `TsgRepository`. |
-| `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of `WiRepository`. |
-| `SQLAlchemySpecRepository` | class | `storage/repositories/spec_sql.py` | SQL impl of `SpecRepository`. Owns `specs` (header, incl. `rapporteurs`) + `spec_versions` (one row per `(spec_id, version)`); `upsert(spec)` writes the header row, `upsert_versions(versions)` writes the per-version rows (PARAMS-bound via SQLAlchemy `insert` with `ON CONFLICT DO UPDATE`), `list(filters)` applies the rich filter grammar, `get(spec_id)` / `list_versions(spec_id)` are the lookups used by `spec show`. |
-| `SQLAlchemySpecDocZipInventoryRepository` | class | `storage/repositories/spec_doc_zip_inventory_sql.py` | Specdata SQLite repository for inventory snapshots; `get_for_versions` reads a selected version page in one batch, while missing inventory remains distinct from a known-empty ZIP and a missing table raises `SpecDocInventorySchemaError`. |
-| `SQLAlchemyTestCaseRepository` | class | `storage/repositories/testcase_sql.py` | SQL impl of `TestCaseRepository`. Owns `testcases` (header keyed by `(testcase_id, group)`) + `testcase_status` (one row per `(testcase_id, group, path)`, FK on both key cols with `ondelete="CASCADE"`) + `testcase_sources` (sync ledger keyed by `filename`). |
-| `_apply_text_filter` / `_apply_date_filter` | helpers | `storage/repositories/tdoc_sql.py` | SQLAlchemy helpers that consume `cli_filters.DATE_FILTER_RE` and the rich-filter grammar. |
-| `configure_sqlite_engine` | function | `storage/backends/sqlite.py` | SQLite engine configuration (sole backend). |
+## Tests and development
 
-## Settings / config (`src/doc3gpp/settings/`)
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `Settings` | pydantic-settings | `settings/schema.py` | Root config: allowlisted `DOC3GPP_*` env vars + nested sub-models. |
-| `SpecDocSettings` | Pydantic model | `settings/schema.py` | Spec-document dedicated `cache_dir`, zip-size, chunk-character, overlap, auto-index/embed, and six-column BM25 settings under `[spec_doc]`. |
-| `ALLOWED_ENV_VARS` | frozenset | `settings/schema.py` | Closed allowlist of `DOC3GPP_*` env vars honoured by `Settings`. |
-| `FilteredEnvSettingsSource` | class | `settings/schema.py` | `EnvSettingsSource` subclass that filters to the allowlist. |
-| `env_var_for_dotted_key` | function | `settings/schema.py` | Render the `DOC3GPP_*` env-var name for a dotted key, or `None` if TOML-only. |
-| `OutputSettings` | model | `settings/schema.py` | Default `format` + per-command field lists. |
-| `OutputSettings.compact` | field | `settings/schema.py:209` | `Settings.output.compact` — `--compact` default (`bool`, default `False`); CLI flag wins when `True`. |
-| `OutputFieldsSettings` | model | `settings/schema.py` | Per-list-command `default_fields` lists. |
-| `CacheSettings` | model | `settings/schema.py` | Disk cache (`dir`, `size_limit_mb`, `purge_confirm`). |
-| `TDocParseSettings` | model | `settings/schema.py` | `tdoc parse` knobs, including TOML-only `max_documents_per_zip=100` and aggregate `max_uncompressed_size_kb=102400` (`0` disables either). |
-| `WordConversionSettings` | model | `settings/schema.py` | Legacy `.doc` LibreOffice timeout in seconds (`word_conversion.timeout_seconds`, default `300`); process environment `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML. |
-| `SearchSettings` | model | `settings/schema.py` | TDoc FTS5 knobs; nine-column `bm25_weights` append `content_text=1.0` and normalize legacy eight-value settings. |
-| `SemanticSearchSettings.max_content_chunks_per_tdoc` | field | `settings/schema.py` | TOML-only cap (default `16`, `ge=1`) on content chunks per TDoc, counted across its CR annexes or family documents in order (main first for a family). |
-| `get_settings` | function | `settings/loader.py` | Cached settings loader (env + TOML file). |
-| `find_config_file` | function | `settings/config_source.py` | TOML discovery (`$DOC3GPP_CONFIG` → `./doc3gpp.toml` → XDG). |
-| `load_config_data` | function | `settings/config_source.py` | `(path, dict)` for the active TOML file. |
-| `parse_dotted_key` | function | `settings/config_writer.py` | Split `a.b.c` into `[a, b, c]` segments. |
-| `patch_dotted` | function | `settings/config_writer.py` | Apply one dotted-key value into a TOML dict (deep set). |
-| `prune_empty_tables` | function | `settings/config_writer.py` | Drop tables that became empty after `patch_dotted`. |
-| `validate_against_settings` | function | `settings/config_writer.py` | Build a `Settings` model from the in-memory dict to validate a candidate value. |
-| `walk_known_dotted_keys` | function | `settings/config_writer.py` | Collect every dotted key reachable from a `Settings` subclass. |
-| `resolve_echo_subtree` | function | `settings/config_writer.py` | Slice the resolved `Settings` back to the dotted-key's subtree for `--dry-run` output. |
-| `write_toml` | function | `settings/config_writer.py` | Persist the patched dict to disk via `tomli_w`. |
-| `resolve_init_target` | function | `settings/config_writer.py` | Resolve `--target` to a writable `Path` (project / user / auto). |
-| `load_default_template` | function | `settings/config_writer.py` | Read the packaged default TOML template (`doc3gpp/data/doc3gpp.toml.example`) via `importlib.resources` with a source-tree fallback for editable installs; consumed by `config init`. |
-
-## Filter / ID helpers (`src/doc3gpp/cli_filters.py`)
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `validate_date_filter` | function | `cli_filters.py` | Boundary guard for `--uploaded-date`. |
-| `TDOC_ID_RE` | regex | `cli_filters.py` | CR-shape TDoc id regex `[RSC][1-9][-sw]\d{6}` (case-insensitive). |
-| `parse_tdoc_id` | function | `cli_filters.py` | Boundary guard for `meeting list --tdoc`; returns `(prefix, number)` or raises. |
-| `validate_tdoc_id` | function | `cli_filters.py` | `parse_tdoc_id` wrapper that raises on bad input. |
-| `DATE_FILTER_RE` | regex | `cli_filters.py` | `<op> 'YYYY-MM-DD'` pattern for date comparisons. |
-
-## Auto-sync helpers (`src/doc3gpp/cli_auto_sync.py`, `src/doc3gpp/cli_url_helpers.py`)
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `extract_tsg_from_tdoc_id_or_pattern` | function | `cli_auto_sync.py` | Pull the TSG short name out of a TDoc id or SQL `LIKE` pattern (e.g. `R5-260013`, `R5%` → `R5`). |
-| `resolve_meeting_id_for_tdoc_id` | function | `cli_auto_sync.py` | Look up the `meeting_id` for a full CR-shape TDoc id via the meeting repo. |
-| `resolve_meetings_for_name_pattern` | function | `cli_auto_sync.py` | `LIKE`-pattern lookup for `meeting list --meeting`. |
-| `sync_tsg_internal` / `sync_meeting_internal` | functions | `cli_auto_sync.py` | Drive meeting-calendar + TDoc-list syncs with skip-rule honoured, warning-only failure. |
-| `trigger_auto_sync` | function | `cli_auto_sync.py` | Build candidate sets (`tsg_candidates`, `meeting_candidates`) from CLI filters — `tsg`, `tdoc`, `meeting_id`, `meeting_name`, and the iterable `tdoc_ids` for `tdoc parse --from-url`. Set-based dedup; returns `(meeting_syncs_done, tdoc_syncs_done)`. |
-| `collect_tdoc_candidates_for_url` | function | `cli_auto_sync.py` | Derive a tdoc-id candidate set from a URL alone (4-branch contract: non-3GPP ∅ / file basename / folder BFS via `TDocCrService.collect_3gpp_file_urls` / unknown-shape basename). Always returns a set — never raises. Called only for 3GPP URLs; a non-3GPP `--from-url` derives its one id directly with `extract_tdoc_id_from_filename`. |
-| `is_3gpp_ftp_url` | function | `cli_url_helpers.py` | 3GPP-FTP detection rule; re-exported from `parsers.direct_extractor` for shared use between `cli.py` and `cli_auto_sync.py`. |
-| `_looks_like_3gpp_file_url` | function | `cli_url_helpers.py` | True when the URL ends with `.docx`, `.doc` or `.zip` (3GPP file shape). |
-| `_looks_like_3gpp_folder_url` | function | `cli_url_helpers.py` | True when the URL ends with `/` (3GPP folder shape). |
-
-## Unified search/index subsystem (`src/doc3gpp/models/unified_search.py`, `src/doc3gpp/models/index.py`, `src/doc3gpp/services/tdoc_search_facade.py`, `src/doc3gpp/services/tdoc_index_service.py`, `src/doc3gpp/services/spec_doc_search_facade.py`, `src/doc3gpp/services/spec_doc_index_service.py`)
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `doc3gpp.models.search.MatchedDocument` / `SearchHit` | dataclasses | `models/search.py` | Source identity, exact URL, document score/previews, and grouped internal FTS5 TDoc hit. |
-| `doc3gpp.models.search.SearchFilters` | dataclass | `models/search.py` | Internal filter arguments consumed by the unified TDoc facade |
-| `doc3gpp.models.unified_search.SearchMode` | enum | `models/unified_search.py` | Public mode: `fts5`, `semantic`, `hybrid`, or `filter`. |
-| `doc3gpp.models.unified_search.TDocSearchResult` / `SpecDocSearchResult` | dataclasses | `models/unified_search.py` | Flattened, shared CLI/HTTP/MCP rows; TDoc rows always serialize `matched_documents`, empty for semantic/filter-only modes. |
-| `doc3gpp.models.index.IndexRequest` / `IndexStatus` / `IndexRebuildResult` | dataclasses | `models/index.py` | Shared index maintenance request, component status, and processed-count result. |
-| `doc3gpp.models.search.SearchError` (+ 3 subclasses) | exception hierarchy | `models/search.py` | Search subsystem errors used by the unified facade and index services |
-| `doc3gpp.services.search_service.SearchService` | service | `services/search_service.py` | Internal FTS5 indexing/search implementation used by the facade |
-| `doc3gpp.services.search_service.PassthroughReranker` | service | `services/search_service.py` | Internal compatibility implementation |
-| `doc3gpp.services.tdoc_search_facade.TDocSearchFacade` | service | `services/tdoc_search_facade.py` | Selects FTS5, semantic, hybrid, or filter-only source SQL and carries FTS5 source matches into flattened TDoc rows. |
-| `doc3gpp.services.tdoc_index_service.TDocIndexService` | service | `services/tdoc_index_service.py` | Reports and independently rebuilds TDoc FTS5/vector index components. |
-| `doc3gpp.storage.db.fts5_query.normalize_query` | function | `storage/db/fts5_query.py` | Index-time pre-processor for TDoc ID + spec ID recognition |
-| `doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository` | repository | `storage/repositories/search_sql.py` | Concrete FTS5-backed `SearchIndexRepository` impl |
-
-## Semantic search implementation (`src/doc3gpp/models/semantic_search.py`, `src/doc3gpp/services/semantic_search_service.py`, `src/doc3gpp/services/embedding/`, `src/doc3gpp/storage/repositories/vector_sql.py`)
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `doc3gpp.models.semantic_search.SemanticSearchHit` | dataclass | `models/semantic_search.py` | Internal semantic/hybrid hit consumed by the unified search facade; not a public CLI/HTTP/MCP row. |
-| `doc3gpp.models.semantic_search.SemanticSearchFilters` | dataclass | `models/semantic_search.py` | Internal vector-side filter arguments for unified search. |
-| `doc3gpp.models.semantic_search.SemanticSearchError` (+ subclasses) | exception hierarchy | `models/semantic_search.py` | Errors raised by the semantic-search subsystem (incl. dim mismatch) |
-| `doc3gpp.services.semantic_search_service.SemanticSearchService` | service | `services/semantic_search_service.py` | Hybrid RRF orchestration: `search`, `index_for_tdoc`, `rebuild_embeddings`, `status` |
-| `doc3gpp.services.embedding.chunker.chunk_text` | function | `services/embedding/chunker.py` | Pure `_chunks(text, size, overlap)` window splitter |
-| `doc3gpp.services.embedding.remote_embedder.OpenAICompatibleEmbedder` | class | `services/embedding/remote_embedder.py` | Remote-only `Embedder` impl: `POST {base_url}/embeddings` via httpx (OpenAI / Ollama `/v1` / vLLM / TEI); `None` when `embedding_base_url` unset |
-| `doc3gpp.storage.repositories.vector_sql.SQLAlchemyVectorIndexRepository` | repository | `storage/repositories/vector_sql.py` | Concrete `VectorIndexRepository` impl backed by sqlite-vec (`vec_tdoc_embeddings` + `vec_meta`) |
-
-## Spec-document search/index subsystem (`src/doc3gpp/models/spec_doc.py`, `src/doc3gpp/services/spec_doc_search_facade.py`, `src/doc3gpp/services/spec_doc_index_service.py`, `src/doc3gpp/services/spec_doc_search_service.py`, `src/doc3gpp/services/spec_doc_semantic_service.py`, `src/doc3gpp/storage/repositories/spec_doc_search_sql.py`, `src/doc3gpp/storage/repositories/spec_doc_vector_sql.py`)
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `SpecDocSearchFilters` / `SpecDocHit` | dataclasses | `models/spec_doc.py` | Internal scalar metadata filters and chunk-level FTS5 DTOs. |
-| `SpecDocSemanticHit` | dataclass | `models/spec_doc.py` | Internal chunk-level vector/hybrid result; facade output is `SpecDocSearchResult`. |
-| `SpecDocSearchFacade` | service | `services/spec_doc_search_facade.py` | Unified four-mode search selection and flattened spec-document result serialization. |
-| `SpecDocIndexService` | service | `services/spec_doc_index_service.py` | Reports and independently rebuilds spec-document FTS5/vector index components. |
-| `SpecDocSearchService` | service | `services/spec_doc_search_service.py` | FTS5 search over combined `sections` / `tables` metadata, per-version indexing, rebuild cursor/status, and stale-only rebuild orchestration. |
-| `SpecDocSemanticService` | service | `services/spec_doc_semantic_service.py` | Embeds the query, performs vector KNN, optionally fans out FTS5, and merges chunk ranks with RRF. |
-| `rrf_merge` | function | `services/spec_doc_semantic_service.py` | Weighted reciprocal-rank fusion with `k=60` by default; preserves vector-only chunks with no FTS5 hit. |
-| `SQLAlchemySpecDocSearchRepository` | repository | `storage/repositories/spec_doc_search_sql.py` | FTS5 implementation on `spec_doc_search` with six BM25/snippet columns `(text, sections, tables, spec_id, version, release)`, plural metadata filters, and `spec_doc_search_meta`. |
-| `SQLAlchemySpecDocVectorRepository` | repository | `storage/repositories/spec_doc_vector_sql.py` | sqlite-vec implementation on `vec_spec_doc_embeddings`, returning `(chunk_id, distance)` KNN rows. |
-
-## CLI entry (`src/doc3gpp/cli.py`)
-
-Twelve Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list` / `schema`), `tdoc` (`sync` / `list` / `schema` / `parse` / `show` / `search` / `index`), `tsg` (`list` / `schema` / `show` / `seed`), `wi` (`sync` / `list` / `schema`), `spec` (`sync` / `list` / `schema` / `show` / nested `doc`), `testcase` (`sync` / `list` / `schema` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`), plus the nested `spec doc` commands (`parse` / `toc show` / `search` / `index` / `schema`) and the `server` group in `cli_server.py` (`start` / `stop` / `status` / `logs` / `install` / `uninstall`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `config_init` | Typer command | `cli.py` | Bootstrap a fresh TOML config file with the packaged default template at `--target` (auto / project / user); `--force` overwrites an existing file. Refuses while `DOC3GPP_CONFIG` is set. |
-| `config_set` | Typer command | `cli.py` | Write one dotted key into the active TOML config file (refuses when none is in use — run `config init` first); clears the settings cache so the new value is visible in the same process. |
-| `_resolve_compact` | function | `cli.py:247` | Resolve `--compact` against `Settings.output.compact` (CLI flag wins when `True`); keeps the Typer `Option` a plain `bool` without a `--no-compact` toggle. |
-
-## Web layer + MCP + Jobs (`src/doc3gpp/web/`, `src/doc3gpp/cli_server.py`)
-
-The `doc3gpp[web]` extra adds a single-port FastAPI server (HTML UI + JSON API + Streamable-HTTP MCP) with a shared asyncio job worker. `[server] enabled` gates every `server` subcommand and the MCP mount. CLI↔HTTP JSON parity is byte-for-byte (compact separators + `ensure_ascii=False`) — see [`docs/web-server.md`](web-server.md).
-
-Search and index surfaces are unified across CLI, HTTP, and MCP; removed
-`/search/sem` routes and split semantic/rebuild-only tool names are not current
-APIs.
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `build_app` | factory | `web/app.py` | Compose the FastAPI app: lifespan builds `WebState`, starts `JobWorker`, mounts `/mcp` (when `server.enabled` and `mcp.enabled`), registers error handlers + static + `all_routers()`; `GET /healthz` |
-| `build_state` | factory | `web/app.py` | Build `WebState(settings, engine, services, jobs)` via `services/factory.build_*` + `SQLAlchemyJobRepository` |
-| `WebState` | dataclass | `web/state.py` | Request-scoped app state: `settings`, `engine`, `services` (`ServiceContainer`), `jobs` (`JobWorkerHandle`) |
-| `ServiceContainer` | dataclass | `web/state.py` | Bundle of services/repos injected into routes |
-| `JobWorkerHandle` | class | `web/state.py` | asyncio handle over the worker: `enqueue`, `cancel`, `event_queues`, `register_queue`/`unregister_queue`, `shutdown` |
-| `get_state`/`get_settings`/`get_engine`/`get_services` | dependency | `web/deps.py` | FastAPI `Depends` helpers reading `request.app.state.web` |
-| `get_meeting_service`/`get_tdoc_service`/`get_tdoc_cr_service`/`get_tdoc_content_service`/`get_wi_service`/`get_tsg_service`/`get_tdoc_search_facade`/`get_tdoc_index_service`/`get_spec_doc_service`/`get_spec_doc_search_facade`/`get_spec_doc_index_service`/`get_tdoc_file_repo` | dependency | `web/deps.py` | Per-service/facade/index `Depends` helpers |
-| `get_job_repo` / `get_job_worker` | dependency | `web/deps.py` | Job repository + worker-handle deps (overridden in tests) |
-| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP; includes `get_tdoc_content(tdoc_id|ftp_url, source_file, format)` and unified search/index tools. Content/search JSON uses the shared HTTP serializers; TDoc results always carry `matched_documents`. |
-| `routes/tdocs.py` | APIRouter | `web/routes/tdocs.py` | TDoc detail/content routes, including SQL-first `/tdocs/{id}/content` and exact-URL `/tdocs/by-url/content` with source selection; `/tdocs/schema` is shared CLI/HTTP/MCP registry output. |
-| `testcase_rows` / `testcase_status_rows` | functions | `web/render.py` | List/detail rows matching CLI `testcase --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects; every other field coerced like the CLI cells). |
-| `routes/landing.py` | APIRouter | `web/routes/landing.py` | `GET /` — static navigation sections for the landing page; includes the `Spec Docs` section linking to `/spec-docs/search` and preserves the `{"sections": [...]}` JSON envelope at `?format=json`. |
-| `routes/testcases.py` | APIRouter | `web/routes/testcases.py` | `/testcases` — list (filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; `_LIMIT_CAP=200`, default limit 50; unknown `group` → `InvalidFilterError`) + `/{testcase_id}` detail (optional `?group=`; without it every stored group returns; HTML renders one section per group or `?format=json` → array of flat per-`(id, group)` objects with nested `statuses` (no `group` in status rows); unknown → 404 `testcase_not_found`) + `/schema` descriptors (shared `schema.html` / `partials/schema_results.html`). |
-| `routes/spec_docs.py` | APIRouter | `web/routes/spec_docs.py` | `/specs/{spec_id}/docs` — collapsed version-first HTML/HTMX page; `/specs/{spec_id}/docs/toc`, `/spec-docs/search`, `/spec-docs/index`, and `/spec-docs/schema` expose the current spec-document portal, unified search, index status, and schema contracts. |
-| `TestcaseNotFoundError` | exception | `web/errors.py` | Lookup miss on a testcase id → HTTP 404 `testcase_not_found` / MCP `-32004`. |
-| `JobKind.SYNC_WIS` | enum member | `models/jobs.py` | `"sync_wis"`; handled by `_sync_wis` (`services.wi.sync`) and enqueued via `POST /jobs/sync/wis` (required TSG field on the sync hub). |
-| `JobKind.SYNC_TESTCASES` | enum member | `models/jobs.py` | `"sync_testcases"`; handled by `_sync_testcases` (`services.testcase.sync`) and enqueued via `POST /jobs/sync/testcases` (twelfth sync-hub form `id="testcase-form"`). |
-| `_to_json` | function | `web/mcp_server.py` | `json.dumps(value, separators=(",", ":"), ensure_ascii=False)` — byte-matches Starlette `JSONResponse` |
-| `meeting_rows`/`tdoc_rows`/`tsg_rows`/`wi_rows`/`spec_rows`/`spec_version_rows` | function | `web/render.py` | List-of-dict rows matching CLI `--format json` (`_coerce_cell`: `None`→`"-"`, date→isoformat) |
-| `to_jsonable` | function | `web/render.py` | Recursively convert dataclasses/values to JSON-safe structures |
-| `register_error_handlers`/`map_domain_error` | function | `web/errors.py` | Map domain errors→HTTP status (404/400/409/503/502/500) with stable slugs |
-| `render_systemd_unit`/`render_launchd_plist`/`install_systemd`/`install_launchd`/`uninstall_systemd`/`uninstall_launchd` | function | `web/install.py` | OS service-unit install/uninstall helpers with `X-Doc3gpp-Managed` marker guard |
-| `InstallNotManagedError` | exception | `web/install.py` | Raised when uninstalling a missing/non-managed unit |
-| `all_routers` | function | `web/routes/__init__.py` | Aggregate `[landing, meetings, search, tdocs, tsgs, wis, specs, spec_docs, testcases, jobs, sync]`; the search router precedes the dynamic TDoc router so `/tdocs/search` is not captured by `/{tdoc_id}`. |
-| `is_htmx_request` | function | `web/filters.py` | `request.headers["HX-Request"] == "true"` — list routes use this to switch between full page (no header) and `partials/<resource>_results.html` fragment (HTMX-driven swap target). |
-| `routes/jobs.py` | APIRouter | `web/routes/jobs.py` | `/jobs` — enqueue sync/parse jobs (including `POST /jobs/sync/wis`) plus `POST /jobs/tdocs/index` and `POST /jobs/spec-docs/index` for unified index maintenance; list, get, SSE `/events`, and cancel. |
-| `JobWorker` | class | `web/workers/job_worker.py` | asyncio worker: polls `QUEUED` jobs at `Settings.server.poll_interval_seconds` (default `1.0`s, range `0.05..60.0`), runs handlers (semaphore-bounded by `max_concurrent_jobs`), streams SSE, emits throttled periodic progress lines at `Settings.server.progress_interval_seconds` (default 10.0), cooperative cancel, skips handlers when the `mark_running` claim loses the race (`(claimed, job)` return), and sweeps orphaned `RUNNING` rows on startup → `FAILED` with `error="orphaned_after_restart"`. Retention cleanup runs on the independent `cleanup_interval_seconds` cadence. |
-| `JobHandlers.KIND_TO_HANDLER` | mapping | `web/workers/handlers.py` | `JobKind`→async handler (network-touching sync/parse/rebuild/purge) |
-| `Job` | dataclass | `models/jobs.py` | `id, kind, status, params, log_lines, result_summary, error, created_at, started_at, finished_at` |
-| `JobKind` / `JobStatus` | enum | `models/jobs.py` | `SYNC_MEETINGS/SYNC_WIS/SYNC_TDOCS/SYNC_TDOCS_ALL/SYNC_SPECS/SYNC_TESTCASES/PARSE_TDOCS/PARSE_TDOC_URL/PARSE_SPEC_DOCS/INDEX_TDOCS/INDEX_SPEC_DOCS/CACHE_PURGE`; `REBUILD_SEARCH` is retained only for decoding historical persisted jobs; `QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED` |
-| `SQLAlchemyJobRepository` | repository | `storage/repositories/jobs_sql.py` | SQL impl of `JobRepository`: `create/get/list/mark_running` (idempotent `UPDATE ... WHERE status = 'queued'` — `rowcount == 0` is a no-op so two workers can't both overwrite `started_at` / `log_lines`; returns `(claimed, job)` so the caller can detect a lost claim)/`append_log` (FIFO-capped at 50)/`mark_succeeded`/`mark_failed`/`mark_cancelled`/`delete_older_than` |
-| `server_app` (6 commands) | Typer group | `cli_server.py` | `server start|stop|status|logs|install|uninstall`; `_require_server_enabled` gates all |
-
-### Tests
-
-| Symbol | Kind | File | Role |
-| --- | --- | --- | --- |
-| `test_web_app.py` | module | `tests/unit/test_web_app.py` | `build_app` wiring + `/healthz` |
-| `test_landing_version.py` | module | `tests/unit/web/test_landing_version.py` | Landing footer/version and static Spec Docs discoverability coverage. |
-| `test_web_routes.py` | module | `tests/unit/test_web_routes.py` | Read routes with fake services |
-| `test_web_jobs_routes.py` | module | `tests/unit/test_web_jobs_routes.py` | Job routes + SSE framing with fake repo/handle |
-| `test_web_install.py` | module | `tests/unit/test_web_install.py` | Install/uninstall render + marker guard |
-| `test_cli_server_stubs.py` | module | `tests/unit/test_cli_server_stubs.py` | `server` sub-app registration + gate |
-| `test_web_end_to_end.py` | module | `tests/integration/test_web_end_to_end.py` | Full lifecycle + cache-miss hint + cancel (real app, worker paused) |
-| `test_mcp_end_to_end.py` | module | `tests/integration/test_mcp_end_to_end.py` | MCP tools + byte-parity with HTTP `?format=json` |
-| `test_schema_info.py` / `test_search_schema.py` | modules | `tests/unit/test_schema_info.py` / `tests/integration/test_search_schema.py` | TDoc document/extraction schema registry, nine-column FTS5 layout, and packaged TOML defaults. |
-| TDoc content public-contract tests | functions | `tests/integration/test_web_end_to_end.py` / `tests/integration/test_mcp_end_to_end.py` | Multi-source JSON/Markdown content, exact-source selection, SQL-first reads, HTTP/MCP byte parity, and always-present `matched_documents`. |
-| `test_cli_server.py` | module | `tests/integration/test_cli_server.py` | CLI start/stop/status/logs/install/uninstall |
-| `test_spec_doc_web.py` | module | `tests/integration/test_spec_doc_web.py` | Spec-doc schema/TOC web route coverage and dependency-wired app behavior. |
-| `test_online_spec_doc_sync.py` | module | `tests/integration/test_online_spec_doc_sync.py` | Opt-in live 3GPP FTP end-to-end tests for 38.331 and 38.523-1; resolves the numeric-newest version at runtime. |
+- `tests/conftest.py`: shared environment/settings/engine isolation.
+- `tests/unit/`: parsers, services, config, contracts, and worker behavior.
+- `tests/integration/`: SQLite repositories, CLI, HTTP/MCP parity, jobs, search.
+- `tests/fixtures/`: source HTML/workbooks/Office archives.
+- `scripts/test_sqlite.sh`: offline test profile with optional xdist.
+- `scripts/dev_run.sh`: development bootstrap helper.
+- `pyproject.toml`: dependencies/extras, pytest markers, Ruff/build configuration.
+- `.github/workflows/publish.yml`: release packaging/publication, not a test matrix.

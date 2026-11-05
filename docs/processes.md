@@ -255,8 +255,10 @@ main; do not assume normal DB discovery will select it.
 
 ## Chunking
 
-The shared chunker uses whitespace-token budgets, paragraph/sentence boundaries,
-and Markdown-table handling. Non-table text can overlap; table rows are kept
+TDoc content semantic chunks and presentation FTS chunks use sliding windows of
+whitespace tokens with overlap; they do not preserve paragraph or table
+boundaries. Spec-document chunks use paragraph/sentence boundaries and
+Markdown-table handling. Their non-table text can overlap; table rows are kept
 atomic and headers are repeated when tables span chunks. A very large atomic
 unit can constrain how tightly a budget is observed.
 

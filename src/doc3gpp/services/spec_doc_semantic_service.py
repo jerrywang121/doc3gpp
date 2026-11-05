@@ -201,6 +201,7 @@ class SpecDocSemanticService:
             tables=chunk.tables,
             chunk_index=chunk.chunk_index,
             text=chunk.text,
+            source_file=chunk.source_file,
             score=0.0,
             previews={},
         )

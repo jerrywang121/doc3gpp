@@ -5,7 +5,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import sessionmaker
 
@@ -88,6 +88,21 @@ def get_engine() -> Engine:
             db_echo=settings.db_echo,
         ),
     )
+
+
+
+def ensure_sqlite_read_transaction(conn: Connection) -> None:
+    """Establish a DBAPI snapshot when sqlite3 legacy mode has not yet done so.
+
+    SQLAlchemy's logical transaction may not issue a DBAPI BEGIN for SELECT in
+    sqlite3 legacy mode. Avoid a nested BEGIN when modern transaction control
+    has already opened the DBAPI transaction.
+    """
+    if conn.dialect.name != "sqlite":
+        return
+    dbapi_connection = conn.connection.driver_connection
+    if not dbapi_connection.in_transaction:
+        conn.exec_driver_sql("BEGIN")
 
 
 @lru_cache(maxsize=1)

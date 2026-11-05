@@ -1,5 +1,10 @@
 # 3GPP Knowledge Reference
 
+This guide covers upstream URLs, naming, and source-field semantics. Runtime
+sync/parse/cache behavior is in [processes.md](processes.md), configuration in
+[config.md](config.md), and implementation navigation in [code-map.md](code-map.md).
+Use the resource `schema` commands for current SQL column definitions.
+
 > Last reviewed: 2026-08-13
 
 This document summarizes the 3GPP source URLs, naming conventions, and extraction fields used by this project.
@@ -127,6 +132,11 @@ TDocs are represented by the `TDoc` model with these fields:
 - `reservation_date`, `uploaded_date` (date | None)
   - Dates parsed from the TDoc list XLSX when present.
 
+- `tdoc_for`, `abstract`, `secretary_remarks`, `ls_to`, `ls_cc`, `original_ls`
+  (str | None)
+  - Additional portal-list columns. `tdoc_for` represents the upstream “For” field; the
+    original text is not inferred from converted document content.
+
 ### TDocFile records (auxiliary attachments)
 
 The `TDocFile` model captures auxiliary files attached to a TDoc: revisions, reviews, and support documents. These are populated automatically as part of `tdoc sync` and stored in the `tdoc_files` table.
@@ -201,9 +211,10 @@ still discovered by scanning the meeting's FTP subfolders after the TDoc
 list sync, because those artifacts are not exposed through the portal
 XLSX endpoint.
 
-Future sources still planned:
-
-- Expanded metadata beyond the current Excel-list columns.
+An outer-ZIP inventory is a different data product from this list or the
+auxiliary-file ledger. It records all non-directory member names in original
+order, including duplicates and unsupported extensions; see
+[TDoc parsing](processes.md#tdoc-parsing).
 
 ## Work Item (WI) Source URLs
 
@@ -317,7 +328,7 @@ status, the radio technologies, and the initial release marker.
 
 The CLI composes the URL from the uppercased `--tsg` value via
 `scraping/spec_source.py::build_spec_list_url`, so `--tsg r5`,
-`--tsg R5`, and `--tsg R5` all map to the same page.
+  and `--tsg R5` map to the same page.
 
 ### Spec detail page (per spec)
 
@@ -346,24 +357,20 @@ detail page into `(Spec, list[SpecVersion])` via
 `parsers/spec_parser.py::parse_spec_detail`, then optionally
 follows the per-version ETSI deliverable HTML (`wki_id`) and
 the per-version CR list HTML (`version_id`) when the
-recency / emptiness gates in `SpecService._maybe_fetch_etsi_pdf`
-and `SpecService._maybe_fetch_crs` are satisfied.
+follow-ups are enabled and their identifier/recency/cached-value checks pass.
+Single-spec bootstrap uses the alternate
+`https://www.3gpp.org/DynaReport/{spec_id_no_dot}.htm` URL to recover a missing
+header before the normal detail pipeline.
 
 ### Conventions
 
 - The slug `spec_id_no_dot` is the dotted `spec_id` with the
   literal dot removed — there is no zero-padding rule.
-- The detail page is fetched once per spec (one HTTP GET per
-  detail URL); the per-version follow-ups are best-effort and
-  gated on presence (`wki_id` / `version_id`) and recency
-  (`upload_date` within the last 90 days, OR the cached `crs`
-  field is empty). The gates are bypassed by the
-  `--per-version-details` flag (CLI default `False`), which always
-  re-fetches every version's follow-ups and preserves the cached
-  `pdf_url` / `crs` values on populated rows.
-- All spec URLs are rooted at `https://www.3gpp.org/dynareport`
-  (no separate FTP subtree); the absolute `SpecVersion.ftp_url`
-  is read from the detail page itself and stored verbatim.
+- Per-version follow-ups are disabled by default, preserving cached PDF/CR
+  fields. `--per-version-details` enables them but does not bypass their
+  availability/recency/cache checks. See [spec sync](processes.md#specifications-and-work-items).
+- Metadata pages use DynaReport; the absolute `SpecVersion.ftp_url` is read
+  from the detail page itself and points to the separate FTP ZIP corpus.
 
 ## Extracted Spec Fields
 
@@ -402,8 +409,8 @@ flow through `SpecService` → `SQLAlchemySpecRepository` →
 - `release` (str | None) — release marker (`Rel-18`, etc.).
 - `ftp_url` (str) — absolute 3GPP FTP URL of the version zip.
 - `pdf_url` (str | None) — ETSI "download as PDF" link, populated
-  only when the optional ETSI follow-up runs (gated on `wki_id`
-  being set and `pdf_url` being empty).
+  only when enabled follow-ups have a `wki_id`, a recent upload date,
+  and an empty cached `pdf_url`.
 - `meeting_id` (int | None) — meeting row that approved this
   version, when the page carries it.
 - `meeting_name` (str | None) — same meeting's human-readable
@@ -411,8 +418,8 @@ flow through `SpecService` → `SQLAlchemySpecRepository` →
 - `upload_date` (date | None) — upload date of the version zip;
   drives the recency gate for the CR-list follow-up.
 - `crs` (str | None) — comma-joined TDoc ids from the per-version
-  CR list page (cached; refreshed when the upload date is within
-  the last 90 days OR when the cached `crs` is empty).
+  CR list page. When follow-ups are enabled, refresh is gated by recent
+  upload or an empty cached value; the default sync does not fetch it.
 - `version_id` (int | None) — DynaReport `version_id` parameter
   used to fetch the CR list HTML.
 - `wki_id` (int | None) — DynaReport `wki_id` parameter used to
@@ -429,9 +436,9 @@ The spec parser implementation is in
   empty list returns `[]` (no error).
 - The type token is read from the row's `<img>` `alt` first; if
   missing, it falls back to the anchor text. Both sources are
-  normalisaed to `TS` / `TR` (everything else is dropped).
+  normalized to `TS` / `TR` (everything else is dropped).
 - The release marker is normalised via
-  `release_from_version` (Task 3) which biases on the longest
+  `release_from_version`, which biases on the longest
   matching `Rel-N` prefix and falls back to the original string
   when no prefix matches.
 - The detail page is parsed into header + versions. The version
@@ -528,12 +535,14 @@ with zero emitted pairs still yields its `TestCase` header).
   sheet's `MCX-IPCAN-5G` column and normalised to `IPCAN-5G`.
 - Single-path groups (`IMS`, `UTRA`, `POS`) store the literal path
   `'default'` (never `NULL`): `path` is part of the composite PK
-  and the list JSON is a dict keyed by path.
+  and public JSON uses a nested array of `{path, gcf_ptcrb, ttcn_status}`.
 - The live workbook contains cross-sheet duplicate TC ids (e.g.
   the same id on both the IMS and UTRA sheets). Identity is
   `(testcase_id, group)`, so each sheet keeps its own header row
   and its own group-scoped status rows — both groups coexist, and
-  `show`/`get` without a group return every matching group.
+  CLI/MCP show reads and `TestCaseService.get_all` return every matching group.
+  The lower-level repository `get(id)` fallback selects one deterministic group;
+  use explicit group/get-all APIs when identity matters.
 
 ## Meeting FTP directory structure
 
@@ -664,178 +673,19 @@ id matching `R5s\d{6}` routes to the TTCN-aware parser while every other
 CR id falls through to the generic parser. Non-TTCN CRs produce no
 `tdoc_cr_ttcn_details` row — the parser returns
 `TDocCRParseResult(cover, ttcn=None)` and the service skips the sidecar
-upsert. Existing installs gain the table lazily: the
-`SQLAlchemyTDocCrTtcnRepository` catches the first
-`OperationalError("no such table")` from a TTCN write and runs
-`Base.metadata.create_all` to bring the DB into shape before the retry.
+upsert. The table is registered in the main metadata and created by
+`doc3gpp db init --scope main`; repositories also have compatibility probes for
+some older databases. Changed-function aggregates are derived from corrections,
+not an independent upstream field; see [parse flows](processes.md#prepare-convert-persist).
 
-## Source file references
+## Extraction semantics beyond source metadata
 
-- `src/doc3gpp/cli.py`
-  - Builds the meeting URL from `--tsg`.
-  - Exposes the `wi` Typer group (`wi sync`, `wi list`).
+Word and presentation members are converted as described in
+[processes.md](processes.md#tdoc-parsing). Presentations supply text, not CR
+covers or inferred spec sections/tables. SQL `parsed`/inventory enrichment and
+the distinction between converted sources and all ZIP members are application
+concepts, not extra upstream spreadsheet columns.
 
-- `src/doc3gpp/services/meetings_service.py`
-  - Syncs meeting rows and filters by date range.
-
-- `src/doc3gpp/scraping/calendar_source.py`
-  - Fetches raw meeting HTML via `ScraperClient`.
-
-- `src/doc3gpp/parsers/calendar_parser.py`
-  - Parses meeting table rows and extracts meeting fields.
-
-- `src/doc3gpp/models/meeting.py`
-  - Meeting domain fields.
-
-- `src/doc3gpp/models/tdoc.py`
-  - TDoc domain fields.
-
-- `src/doc3gpp/scraping/wi_source.py`
-  - Builds the per-TSG DynaReport URL and fetches the raw WI page HTML
-    via `ScraperClient`.
-
-- `src/doc3gpp/parsers/wi_parser.py`
-  - Parses the `dsp-tsgwgxwis` table and extracts WI rows into `Wi`
-    dataclasses.
-
-- `src/doc3gpp/services/wi_service.py`
-  - Orchestrates WI sync (fetch + parse + upsert) and exposes the
-    SQL-`LIKE`-filtered list query used by the CLI and SDK.
-
-- `src/doc3gpp/storage/repositories/wi_sql.py`
-  - SQLAlchemy implementation that upserts into `wis` keyed by
-    `(wi_id, tsg_short)` and lists rows with `LIKE` filters.
-
-- `src/doc3gpp/models/wi.py`
-  - WI domain fields (`wi_id`, `acronym`, `release`, `name`,
-    `tsg_short`, `updated_at`).
-
-- `src/doc3gpp/models/testcase.py`
-  - Testcase domain fields (`TestCase`, `TestCaseStatus`,
-    `TestCaseWithStatuses`, `TestCaseDetail`, `TestCaseSource`) and
-    typed errors (`TestcaseSourceNotFoundError`,
-    `TestcaseWorkbookNotFoundError`).
-
-- `src/doc3gpp/scraping/testcase_source.py`
-  - `HISTORY_URL` + `list_history_files` / `select_latest` /
-    `fetch_testcase_zip` for the RAN5 TTCN status History folder.
-
-- `src/doc3gpp/parsers/testcase_parser.py`
-  - `SHEET_TO_GROUP` / `PATH_RANK` / `STATUS_PAIRS` /
-    `FIXED_SPEC` + `extract_workbook` / `parse_testcase_workbook`
-    (header-validated parse with per-`(testcase_id, group)` identity).
-
-- `src/doc3gpp/services/testcase_service.py`
-  - Orchestrates testcase sync (fetch + parse + upsert with the
-    file-identity skip rule) and exposes the SQL-`LIKE`-filtered
-    list query used by the CLI and SDK.
-
-- `src/doc3gpp/storage/repositories/testcase_sql.py`
-  - SQLAlchemy implementation that upserts into `testcases` keyed by
-    `(testcase_id, group)`, replaces `testcase_status` rows per
-    `(testcase_id, group)` pair, and keeps
-    the `testcase_sources` sync ledger.
-
-- `src/doc3gpp/models/tdoc_cr.py`
-  - Domain dataclasses for the CR extraction pipeline: slim
-    `TDocCRDetails` (cover-page only), `TDocCRTTCNDetails` (TTCN
-    sidecar), `TDocCRParseResult` (main-document parser bundle),
-    `TDocExtractMeta` (URL-keyed extraction parent/version/count),
-    `TDocDocument` / `TDocParseBundle` (ordered ZIP source collection),
-    `DirectParseResult` / `DirectParseBatchResult` (document-collection
-    direct-mode outcomes).
-
-- `src/doc3gpp/storage/compression.py`
-  - Shared gzip JSON helpers (`compress_json` / `decompress_json`)
-    used by the cover-page repo and the TTCN sidecar repo for any
-    binary JSON detail column.
-
-- `src/doc3gpp/storage/repositories/tdoc_cr_ttcn_sql.py`
-  - `SQLAlchemyTDocCrTtcnRepository` — SQL impl for the
-    `tdoc_cr_ttcn_details` sidecar. Six overview columns + a
-    gzip-compressed `required_changes` blob; one row per immutable
-    `ftp_url`. Lazy bootstrap catches `OperationalError("no such
-    table")` on the first public method and runs
-    `Base.metadata.create_all` before the retry.
-
-## Extracted field summary
-
-### Meetings
-
-- `meeting_id`
-- `name`
-- `title`
-- `location`
-- `start_date`
-- `end_date`
-- `ftp_url`
-- `start_doc`
-- `end_doc`
-- `tsg`
-
-### TDocs
-
-- `tdoc_id`
-- `title`
-- `meeting_id`
-- `ftp_url`
-- `source`
-- `type`
-- `status`
-- `reservation_date`
-- `uploaded_date`
-- `cr_cat`
-- `is_revision_of`
-- `revised_to`
-- `release`
-- `spec`
-- `version`
-- `related_wis`
-- `cr_num`
-- `cr_pack`
-
-### TDocFiles
-
-- `id`
-- `tdoc_id`
-- `type`
-- `file`
-- `ftp_url`
-- `uploaded_date`
-
-### WIs
-
-- `wi_id`
-- `acronym`
-- `release`
-- `name`
-- `tsg_short`
-
-### Testcases
-
-- `(testcase_id, group)` composite identity (one header row per
-  group, so the same id may exist in several groups)
-- `title`
-- `ats`
-- `feature`
-- `release`
-- `wis`
-- `spec`
-- `group`
-- per-`(group, path)` `testcase_status` rows (`group`, `path`,
-  `gcf_ptcrb`, `ttcn_status`)
-
-## Notes
-
-- The current implementation supports meeting report scraping, TDoc list sync
-  from the 3GPP portal `GenerateDocumentList.aspx` endpoint, auxiliary TDoc
-  file discovery on the meeting FTP folders, CR cover-page extraction for
-  synced CR TDocs, WI DynaReport sync, and RAN5 testcase status snapshots
-  (`testcase sync` → latest `TTCN CR Agreement Status` History zip).
-- `doc3gpp tdoc sync` uses the stored `Meeting.meeting_id` as the portal
-  `meetingId` parameter and falls back to the configured
-  `sync.tdoc_list_url_template` when the default endpoint changes.
-- Work Item extraction is fully automated: each TSG's `WI DynaReport` page
-  is fetched on demand by `doc3gpp wi sync --tsg <short>` and persisted
-  to the `wis` table with `(wi_id, tsg_short)` as the upsert key.
-- The meeting URL is derived from the TSG short name and not entered as a full URL.
+For current field definitions use `<resource> schema`; for source symbols use
+[the code map](code-map.md). This guide deliberately does not repeat either
+complete inventory.

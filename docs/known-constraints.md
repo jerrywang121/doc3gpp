@@ -1,304 +1,133 @@
-# Known Constraints
+# Known constraints
 
-> Last reviewed: 2026-08-13
+Current implementation limits, not historical test results. For remedies and
+runtime context see [processes](processes.md); proposed work is in [TODO](TODO.md).
 
-Open / known limitations that future work should respect. This file is
-the single source of truth — `docs/architecture.md` §Out of scope (today)
-and the per-feature notes below should stay in lock-step with this list.
+## Configuration and security
 
-When a constraint is lifted, **edit this file** as part of the same
-change set so the docs stay honest.
+- **No HTTP/MCP authentication or authorization.** Host/origin checks are
+  transport protection, not identity. Keep loopback-only unless an external
+  trusted gateway protects both reads and mutations.
+- **Process environment and `.env` differ.** Only process variables are filtered
+  through `ALLOWED_ENV_VARS`; the dotenv source can set other recognized fields
+  absent from higher-priority TOML. See [precedence](config.md#discovery-and-precedence).
+- **Settings/services are process-cached.** Restart after config changes. The
+  server does not hot-reload configuration or retroactively resize pools.
+- **Config writes reserialize TOML.** Comments/formatting are lost. API keys are
+  redacted by `config show`, but database URLs and other fields may be sensitive.
+- **User bootstrap and XDG discovery differ.** `config init --target user` writes
+  to `~/.config/doc3gpp/config.toml`; discovery instead uses `XDG_CONFIG_HOME`
+  when set. See the [bootstrap workaround](config.md#inspect-and-edit).
+- **Outbound TLS verification defaults to false.** Enable it where possible;
+  it does not secure the inbound server.
+- MCP host checks currently allow localhost/127.0.0.1. Changing the bind address
+  or origin list alone does not provide a public-host deployment configuration.
 
-## Schema
+## Schema and backfills
 
-- **No general Alembic migration framework.** `Base.metadata.create_all`
-  via `storage/db/migrate.py` is the schema bootstrap; `db_auto_migrate`
-  is TOML-only and does not run migrations. The bootstrap does contain
-  explicit, idempotent compatibility migrations: the legacy
-  `tdoc_cr_details` rename, the TDoc extraction completeness columns, and
-  recreation of the TDoc FTS5 virtual table when its indexed/provenance
-  layout changes. The four content tables (`tdoc_cr_annexes`, `tdoc_wid_contents`,
-  `tdoc_ls_contents`, `tdoc_discussion_contents`) are created from the ORM metadata
-  and start empty. The intermediate branch schema (`tdoc_documents`,
-  `document_text`) was never deployed and has no migration; a local database
-  created from it must be recreated.
-  Other ORM shape changes without a dedicated migration may still require
-  a destructive `doc3gpp db reset`; do not reset a database to upgrade the
-  multi-file TDoc extraction layout.
-- **Orphan testcase tables on upgrade.** After the testcase-DB split,
-  pre-existing main DB files keep `testcases` / `testcase_status` /
-  `testcase_sources` tables as orphans (harmless — nothing reads
-  them; `Base.metadata.create_all` will not drop them). Reclaim the
-  space with `doc3gpp db reset --scope main` (destructive!) or leave
-  them. The testcase corpus re-syncs from scratch via
-  `testcase sync` into the new file.
-- **`meeting sync`, `wi sync`, and `tsg seed` call `create_schema()`**
-  for fresh-database ergonomics. Idempotent but blurs the `db init`
-  boundary; `tdoc sync` and `tdoc parse` already dropped the call.
-  See [`docs/conventions.md`](conventions.md) for the canonical list.
-- **TDoc multi-file completeness is not inferred from old cover/cache rows.**
-  Existing `tdoc_extracts` rows migrate to `extraction_version=1` and
-  `document_count=0`; normal `tdoc parse` discovery treats them as pending,
-  and a successful reparse creates the version-2 content rows.
-  Reparse the original ZIP (using its cache copy when available); an old
-  single-member Markdown artifact cannot reveal which supporting members were
-  present. No whole-corpus reset or standalone repair command is required.
-- **Older cache-key schemas are a separate compatibility break.** The
-  historical `tdoc_extracts` migration from `zip_path` / `markdown_path` to
-  indexed `cache_file` is not backfilled by the multi-file completeness
-  migration. Installs that predate `cache_file` still need to follow the
-  existing schema-upgrade guidance; orphaned legacy `zips/<tdoc_lower>` and
-  `markdown/<sha256>` files can be reclaimed with cache purge or FIFO eviction.
+- Bootstrap is additive/idempotent for explicitly supported changes, not a
+  general Alembic migration history. Older schemas without dedicated migrations
+  need individual assessment and backups, not an assumed automatic upgrade.
+- Main, testcase, and specdata are separate databases. Legacy testcase tables
+  can remain orphaned in an old main file; nothing automatically moves/drops them.
+- `db init` creates inventory/presentation tables but does not backfill parsed
+  sources. Force reparse to populate old inventories/full presentations.
+- Legacy TDoc extractions are incomplete version 1 until reprocessed; an old
+  cover or single-member cache cannot prove full ZIP completeness. Very old
+  `zip_path`/`markdown_path` schemas are a separate compatibility issue, not
+  repaired just by adding the version-2 completeness columns.
+- Some sync entry points bootstrap schema for fresh-database ergonomics;
+  applications should still initialize required scopes explicitly.
 
-## Settings caching
+## Upstream and sync
 
-- **`get_settings` is `@lru_cache(maxsize=1)`** and `ScraperClient`'s
-  `__init__` reads settings once, so env changes mid-process do not
-  propagate after the first call. Restart the process to pick up new
-  `DOC3GPP_*` values (only the closed
-  `doc3gpp.settings.schema.ALLOWED_ENV_VARS` subset is honoured by
-  `Settings` — everything else is silently ignored). Tests must
-  `cache_clear()` both loaders when mutating env via `monkeypatch` —
-  see [`docs/conventions.md`](conventions.md) for the canonical fixture.
+- Sources are coupled to 3GPP portal/DynaReport/FTP layouts. Unexpected HTML
+  can produce fewer/empty rows rather than a hard error. Record fixtures when
+  upstream layout changes; online tests are opt-in and inherently variable.
+- The canonical FTP root is hardcoded in transport/source helpers, while the
+  TDoc portal list URL is configurable. Portal lists provide no reliable
+  Last-Modified optimization; skip rules use local intervals/windows.
+- Missing meetings cannot be bypassed by `tdoc sync`; no-selector sync revisits
+  tracked meetings rather than discovering the entire calendar.
+- **TSG spec sweep force is not propagated.** `SpecService.sync(force=True)`
+  still calls per-spec workers without bypassing their interval gate. This
+  affects CLI TSG/no-selector sweeps and queued TSG sync. Single-spec
+  `sync_spec(force=True)` does bypass the gate. The advertised sweep flag is a
+  known mismatch, not a promise that documentation can repair.
+- Auxiliary-file sync upserts discovered rows; a successful listing does not
+  necessarily remove entries that disappeared upstream.
+- Fallback TDoc ZIP URL synthesis is fixture-backed for R5s/R5w, not a universal
+  URL builder for every TSG; prefer a stored/listed source URL.
+- Non-3GPP direct-mode auto-sync scans the whole URL for an ID, so a directory
+  segment can trigger sync even when the filename itself has no TDoc ID.
 
-## Network / scraping
+## Extraction and content
 
-- **`https://www.3gpp.org/ftp/` is hardcoded** in the FTP scraper.
-  If 3GPP moves the assets to a CDN, `meeting sync` will silently
-  return empty rows rather than raise.
-- **`ScraperClient.get_text` retries via a narrow exception surface**
-  (specific `httpx` retryable subclasses + retryable HTTP status
-  codes). Programming errors propagate immediately — see the
-  anti-pattern in [`docs/conventions.md`](conventions.md).
+- Only registered CR/WID/LS/discussion families are eligible. Standalone
+  presentations are not direct TDoc inputs; presentation ZIP members are.
+- Native Office extraction requires `[extract]`; legacy `.doc`/`.ppt` also needs
+  Writer/Impress. PDF, spreadsheet, image, and nested-ZIP content is not converted.
+  Presentation extraction has no OCR/chart understanding or inferred metadata.
+- A failed supporting member leaves an extraction incomplete and is retried by
+  every normal parse, even if the same converter failure is permanent.
+- Single-file URL parsing accepts `--force` but dispatches extraction with
+  `force=False`. Use `tdoc parse --tdoc <id> --force` for the TDoc's current URL;
+  do not rely on the URL flag to refresh an already-complete historical source.
+  Single local files reject force instead.
+- CR main Markdown is cache-only and **its body is not full-text indexed**.
+  Covers/change/TTCN fields and SQL annex/family content are searchable. A
+  cache-purged complete CR can be excluded by normal SQL pending selection;
+  recover with forced parse or the ID-based raw-extraction path.
+- Raw ID reads that need extraction convert in-process rather than using the
+  batch conversion pool; URL/HTTP/MCP reads never extract implicitly.
+- SQL bundle replacement is atomic, but cache/inventory/TOC/ledger/index updates
+  are not one end-to-end transaction. A crash can leave partial derived state.
+- ZIP inventory contains untrusted decoded names and all extensions, not just
+  converted content. Duplicate names are preserved in inventory, which does not
+  imply ambiguous members can be selected as distinct converted documents.
 
-## Calendar parser
+## Search and freshness
 
-- **Coupled to the current 3GPP DynaReport table layout.** Upstream
-  HTML changes will silently break `meeting sync` (no error, just
-  fewer rows). Re-pin tests against a recorded page snapshot when the
-  table shape changes.
+- FTS5/vector features are SQLite-specific. Other engine backends do not imply
+  equivalent search support; optional sqlite-vec and a remote embedding endpoint
+  are required for semantic mode.
+- TDoc semantic content is capped across documents. Later content may be
+  FTS-searchable without an embedding. Status is not a promise of semantic
+  coverage for every word in every source.
+- Superseded ZIP URLs remain searchable while their content rows remain stored.
+  Rebuilding reads stored URLs; it does not remove historical content.
+- LIKE-based vector filters run after bounded KNN windows. Widening stops at
+  4096 candidate rows, so selective filters can return fewer than the requested
+  number of hits even when other matching corpus rows exist.
+- Legacy/stale vector provenance can produce `matched_chunk: null`. A whole-file
+  FTS expression may also lack a single satisfying chunk; neither case should
+  be presented as a verified chunk match.
+- Vector schema bootstrap can pin a default 384-dimensional table before a
+  different model is configured. Model/dimension changes need explicit handling;
+  a rebuild flag alone is not a general dimension migration guarantee.
+- Chunk-policy changes and old snapshot-based `--stale-only` coverage need care.
+  Use a full embedding rebuild after changing model/chunk settings or when
+  newly synced older-dated metadata is missing; inclusive snapshot-day cutoffs
+  may re-embed already indexed rows. Inspect status and provenance separately.
+- Status avoids decompressing/chunking all content by using stored signatures
+  and token counts. It cannot certify an externally corrupted compressed blob
+  just because its stored hash/count remains unchanged. Full rebuilds may log
+  and skip corrupt content while retaining older index rows; repair source SQL
+  through reparse, then rebuild.
 
-## TDoc list sync
+## Pools, jobs, and deployment
 
-- **TDoc lists are downloaded from the 3GPP portal.**
-  `GenerateDocumentList.aspx?meetingId={meeting_id}` returns the XLSX
-  directly; the URL template is configurable via
-  `sync.tdoc_list_url_template`. Auxiliary TDoc files are still scanned
-  from the meeting's FTP folders.
-- **Skip rules are limited to the closed window and the local sync
-  interval.** The upstream XLSX does not return a reliable
-  `Last-Modified` header, so the coordinator no longer performs an
-  mtime comparison. Use `--force` to bypass the remaining rules.
-- **TDoc date parsing** accepts both ISO (`YYYY-MM-DD`) and the
-  `DD/MM/YYYY HH:MM:SS` shape used upstream; both are stored as
-  `Date`. Anything outside these shapes falls through to `NULL`.
-
-## TDoc extraction and content
-
-- **URL templates locked in for `R5s` (TTCN email CR) and `R5w`
-  (TTCN workshop CR) branches** against offline fixtures. The `R5-`
-  and `C6-` templates return `None` until exercised against the live
-  site — treat `None` as "not yet supported", not as an error. See the
-  inline docstring at
-  `src/doc3gpp/scraping/tdoc_zip_source.py:_build_tdoc_zip_url`.
-- **`python-docx` is an opt-in extra.** Without `doc3gpp[extract]`
-  installed, the CLI prints a friendly install hint and exits 1.
-- **Only CR, WID, LS, and discussion TDocs are parsed.**
-  Every other type, including `other`, DRAFT, and BB, is never downloaded or stored. The type guard raises `TDocTypeUnsupportedError` before any download for
-  an unsupported id. `--tdoc` reports it as skipped, and the raw read names the eligible types.
-- **`tdoc_cr_ttcn_details` is created lazily on first write, not on
-  `doc3gpp db init`.** `TDocCrTtcnDetailOrm` is registered with
-  `Base.metadata` so a fresh install picks it up via the standard
-  `create_schema()` call, but existing installs that pre-date the
-  sidecar gain the table only when `TDocCrService` writes the first
-  TTCN row. Each repo implements `_ensure_table_exists()`: a
-  `SELECT 1 FROM tdoc_cr_ttcn_details LIMIT 0` is attempted, and an
-  `OperationalError("no such table")` triggers an idempotent
-  `Base.metadata.create_all()` followed by a retry. The same lazy
-  bootstrap covers `tdoc_cr_cover_page` on legacy DBs.
-- **`tdoc_cr_ttcn_details.changed_functions` is a derived aggregate
-  column.** It holds the sorted, deduplicated set of
-  `"<module_basename>.<function_name>"` entries derived from each
-  row's `required_changes` payload by
-  `parsers/cr/ttcn_functions.py::extract_changed_functions` at parse
-  time, persisted as a newline-delimited `Text` column (deliberately
-  **not** gzip-compressed — the column is queryable via `LIKE`, e.g.
-  `WHERE changed_functions LIKE 'NR5GC_Positioning_Functions.%'`).
-  Pre-existing rows from before the column landed stay `NULL` after
-  the lazy bootstrap; the repo's tolerant `_orm_to_details` reads
-  `NULL` / empty as `[]` so the sidecar still round-trips, and the
-  CLI renderers display the empty aggregate as `0 item(s)` (table)
-  or `—` (markdown). For installs that pre-date this column, the
-  same `_ensure_table_exists()` helper extends the lazy bootstrap
-  with a column-probe step: a `SELECT changed_functions FROM
-  tdoc_cr_ttcn_details LIMIT 0` is attempted after the table-exists
-  probe, and an `OperationalError("no such column")` triggers an
-  idempotent `ALTER TABLE tdoc_cr_ttcn_details ADD COLUMN
-  changed_functions TEXT`. The probe is idempotent — a second call
-  short-circuits as soon as the SELECT succeeds. The `--force`
-  re-parse path (`doc3gpp tdoc parse --tdoc <id> --force`)
-  recomputes and persists the aggregate on demand, since the
-  derivation runs unconditionally inside
-  `CRParserBase.parse()` at the `TDocCRTTCNDetails` construction
-  site (`parsers/cr/cr_parsers.py:161`). A scripted bulk back-fill
-  is not provided — iterate `tdoc list --cr-type TTCN` and invoke
-  `tdoc parse --tdoc <id> --force --yes` per id.
-  - **Partial-extraction markers.** The aggregate uses a 4-form
-    output contract: when both the module basename and function name
-    extract the entry is the full-match form `"<module>.<function>"`;
-    when only the module basename is recoverable the entry is
-    recorded as `'<module>.'` (trailing-dot sentinel); when only the
-    function name is recoverable it is recorded as `'.<function>'`
-    (leading-dot sentinel); when neither is recoverable the
-    correction is dropped. The dot sentinels are unambiguous in SQL:
-    `LIKE '%.'` finds module-only entries, `LIKE '.%'` finds
-    function-only entries, and the joined dot inside the full-match
-    form remains inert.
-- **Legacy `.doc` needs system LibreOffice Writer.** Both `.docx` and `.doc`
-  members are converted, but `.doc` additionally requires `libreoffice` or
-  `soffice` on PATH. It runs in an isolated temporary directory/profile with a
-  timeout configured by `[word_conversion] timeout_seconds` (default `300`);
-  the allowlisted process environment variable
-  `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML. `.docx` never invokes
-  LibreOffice. A missing dependency, timeout,
-  or failed conversion names the original source. Conversion may normalize
-  legacy formatting before the existing structural parsers run. PDF, spreadsheet,
-  and nested-ZIP members are not converted. A CR ZIP must have exactly
-  one converted member with the CR cover; that main document alone
-  produces cover/TTCN/body-change metadata. Other members are CR annexes stored as
-  content in `tdoc_cr_annexes`. A failed main fails the TDoc; failed annexes are
-  skipped and retried normally. Already-complete archives need `--force` to
-  include `.doc` members ignored by older versions. Spec source/TOC `docx_count`
-  fields retain their names but count both formats.
-  CR annexes and every family document are FTS5-searchable and semantically chunked.
-  The CR main body is not full-text indexed; see the CR full-text constraint below.
-- **TDoc ZIP resource caps are TOML-only.** `[tdoc_parse]`
-  `max_documents_per_zip` defaults to `100` and
-  `max_uncompressed_size_kb` defaults to `102400` aggregate supported
-  member bytes; `0` disables either. Limit violations are skips, while
-  zero/multiple main candidates and supported-member conversion errors
-  fail the archive.
-- **Markdown cache is a derived multi-member ZIP.**
-  `cache/markdown/<cache_file>` contains one `.md` entry per stored
-  document plus a versioned manifest. SQL content in the four content tables
-  is authoritative for retrieval and FTS5 rebuilds, so cache purge or
-  FIFO eviction does not delete SQL content or change completeness. The CR main
-  exists only in this archive, so purging it makes raw CR main Markdown unavailable
-  until the TDoc is re-downloaded.
-  Legacy plain UTF-8, gzip, and single-member Markdown ZIPs remain
-  readable as incomplete version-1 content only; they never prove a
-  complete version-2 extraction.
-- **A complete CR whose cache archive was purged is not re-selected by a normal `tdoc parse`,** because pending selection is SQL-only; recover it with `doc3gpp tdoc parse --tdoc <id> --force` or a `doc3gpp tdoc show --tdoc <id> --format raw` read, which re-runs extraction and rewrites the archive.
-- **Semantic content chunks are capped.** Chunks for CR annexes and family
-  documents are labelled per document.
-  Chunks are re-derived from the stored Markdown. `semantic_search.max_content_chunks_per_tdoc`
-  (TOML-only, default `16`) counts across a TDoc's content in order, so text past the cap
-  is not embedded, but FTS5 still finds it. The CR main gets no content chunks. The
-  TDoc-level metadata chunks (`max_chunks_per_tdoc`, default `8`) are unchanged.
-- **CR main text is not full-text indexed.** A term that appears only in the CR main
-  body does not find the TDoc. Its cover, change, and TTCN fields are still indexed,
-  and CR annexes are indexed. This is the documented consequence of the content design
-  (spec §8, decision 24) and is an accepted trade-off.
-- **Semantic freshness ignores chunking settings.** The content-hash freshness check
-  does not detect a change to `semantic_search.chunk_size` or `chunk_overlap`. After
-  changing either, run `doc3gpp tdoc index --rebuild-embeddings`.
-- **`--stale-only` does not select a metadata-only TDoc that is missing from the vector
-  index and was uploaded before the last completed rebuild's snapshot day.** A rebuild
-  stamps `last_indexed_uploaded_date` with the newest upload date it saw. `--stale-only`
-  selects TDocs uploaded on or after that day, so an earlier-dated title-only TDoc that is
-  synced later stays missing. A TDoc with no content documents has nothing for the content
-  check to compare. Use `--rebuild-embeddings` to repair these rows.
-- **Each `--stale-only` run re-embeds the TDocs uploaded on the snapshot day.** The cutoff
-  is inclusive, so already-indexed TDocs uploaded on the newest upload day are re-embedded
-  on every run, until a later upload date appears in `tdocs`. Their vectors are unchanged,
-  so the cost is embedding requests only, and `IndexStatus.is_stale` ignores them. A TDoc
-  with empty embed text is never indexed, so the same cutoff re-selects it on each run.
-- **Vector status cost grows linearly with the corpus.** `status()`, the `--stale-only`
-  count, and the stale check no longer decompress or chunk content. Each content row
-  stores `token_count` (whitespace tokens of its Markdown), and the expected signatures
-  are planned from those counts, so status decompresses nothing. The cost is still
-  linear in the number of stored chunks. Medians on WSL2 (22 cores), three documents per
-  TDoc of about 8000 words each, measured with a scratch script that is not in the repo:
-  N=50 status 0.033 s and stale-only count 0.010 s; N=200 status 0.096 s and count 0.050 s;
-  N=800 status 0.41 s and count 0.15 s. Before the `token_count` change the same script
-  gave 0.080 s / 0.066 s, 0.30 s / 0.26 s, and 1.35 s / 1.09 s. What remains is SQLite
-  work: the stale check reads every `vec_tdoc_embeddings` row (about 0.12 s at N=800), and
-  `status()` also runs a snapshot-day `NOT EXISTS` against that table (about 0.23 s at N=800
-  with 10 TDocs on the snapshot day). A NULL `token_count`, from a row written without one or
-  one the migration could not decode, marks its TDoc stale. A blob corrupted after its write
-  with `token_count` still set is not detected by status; indexing still fails on it.
-- A rebuild started before this change has no persisted snapshot, so its `--resume` takes the newest upload date seen at resume time until the next fresh `--rebuild-embeddings`.
-- **A corrupt content blob is skipped by `tdoc index` rebuilds.** If a stored content
-  row cannot be decoded, the batch containing it is rolled back and retried one TDoc at a time; `upsert_for_tdoc` logs a warning for that TDoc and the rebuild loop
-  continues. The TDoc's old FTS rows remain and its stored hash still matches, so
-  `--stale-only` does not retry it; a full `doc3gpp tdoc index --rebuild` is needed.
-  Content is written only through the strict repository, so corruption is not expected.
-- **A failed annex keeps the extraction incomplete.** Each normal `tdoc parse` retries
-  it and prints the warning again, so an annex that always fails is retried on every run.
-- **Non-3GPP `--from-url` ids come from the whole URL.** The direct-mode id is the
-  first TDoc-shaped match in the whole URL string, so a directory segment can trigger the
-  TSG and meeting sync. The type-detection specification's step 1 reads the file name
-  instead. This is an open mismatch for review; the current behaviour is documented under
-  Direct-mode auto-sync in `docs/cli.md`.
-- **CR raw reads re-run extraction.** `tdoc show --format raw --tdoc <id>` runs
-  extraction first, so an incomplete TDoc is re-downloaded on each raw read when its
-  ZIP is not cached. URL reads never extract.
-- **`tdoc show --format raw` does not use the DOCX conversion pool.** When the TDoc's
-  extraction is incomplete, the raw read re-extracts it in-process, so those
-  conversions run sequentially. Deferred; it is a read path, not a parse path.
-- **A worker death in the shared DOCX pool fails other callers' unfinished conversions.**
-  All concurrent `convert_members` calls share one executor. If a worker dies (rare: an
-  out-of-memory kill or a native crash), unfinished members of other concurrent callers
-  fail with `DocxConvertPoolError` too. The `2 × docx_workers` window is per call, not per
-  process, so it bounds each caller's outstanding work, not the process as a whole.
-- **Superseded ZIP URLs stay indexed.** Full-text and semantic indexes read content from
-  every ZIP URL stored for a TDoc. When `tdocs.ftp_url` changes, the text from the old URL
-  stays searchable until its rows are removed. A `tdoc index --rebuild` does not remove
-  them, because rebuilds read every stored URL.
-- **LIKE-based vector filters run after the knn window.** Meeting name and title,
-  release, and spec filters are applied after the vector window, because the vector
-  index rejects LIKE on metadata columns. Only `tdoc_id`, `tsg`, `meeting_id`, and the
-  `since` and `until` date range are applied inside the window. Semantic-only and hybrid
-  search both widen the window until enough TDocs match or the 4096-row cap is reached,
-  so a very selective LIKE filter can still return fewer results.
-
-## Test surface
-
-- **`online` tests access live `3gpp.org` + FTP** and are flaky.
-  Always run with `-rs` to surface skip reasons; do not gate CI on
-  them. They live behind the `online` pytest marker so the default
-  profile (`pytest -m "not online"`) skips them.
-- **No CI pipeline exists.** The project relies on local
-  `scripts/test_sqlite.sh` runs. There is no `.github/workflows/`,
-  no Makefile, no Dockerfile.
-
-## Recorded pre-existing baseline issue
-
-- A pre-feature baseline run reported 2,666 passed, 1 skipped, and one
-  failure in `tests/integration/test_auto_sync_sqlite.py::test_tdoc_list_auto_sync_triggers_tdoc_sync`.
-  The test leaves the calendar module's imported `ScraperClient` unmocked
-  and received a live HTTP 403 in that environment. A one-off in-memory
-  mock-binding correction made the individual test pass without repository
-  edits. This unrelated test was intentionally recorded, not repaired as
-  part of the TDoc multi-file feature.
-
-## Configuration writer
-
-- **`doc3gpp config set` rewrites the entire TOML file via `tomli_w`**
-  (`src/doc3gpp/settings/config_writer.py:write_toml`); comments, blank
-  lines, and key ordering are not preserved. Keep the file under VCS
-  if formatting matters — diffs will look like full rewrites on the
-  first edit.
-- **`doc3gpp config init` writes the canonical template (full defaults)
-  at the bootstrap target** (`--target auto|project|user`; default
-  `auto`); `--force` overwrites unconditionally. Refuses while
-  `DOC3GPP_CONFIG` is set so the env pin cannot mask the new file.
-  The previous `doc3gpp config set --init` is removed — migrate by
-  running `doc3gpp config init` (with `--force` when overwriting) then
-  `doc3gpp config set <key> <value>` to edit individual keys.
-- **Config writes are atomic and permission-aware.** `config set` and
-  `config init` write a same-directory temp file, fsync it, and
-  `os.replace` it over the target, so a failed write keeps the old file.
-  `config init` creates the file as `0600`. `config set` keeps an
-  existing file's mode, except that the user config and any secret write
-  are set to `0600`.
+- The durable queue is **single-process**, not a distributed worker system.
+  Startup fails all leftover running jobs as orphans. Multiple HTTP/stdio worker
+  processes sharing the database can interfere with ownership/recovery.
+- Cancellation is cooperative, not preemptive and not a rollback. A running
+  converter/network call or submitted writer can finish after cancellation.
+- Only participating operations use the shared single persistence executor;
+  other SQL writes can contend. WAL/busy timeouts reduce, not eliminate, locks.
+- A conversion-process death can fail other callers' unfinished conversions
+  sharing that executor. Its outstanding conversion window is per call, not a
+  process-wide backpressure guarantee.
+- Periodic progress is throttled and bounded SSE queues can drop old events.
+  SQL job logs are durable, but throttled-away progress is not replayed later.
+- The packaged release workflow is not an automated test matrix. Local offline
+  tests and fixture/cache isolation remain necessary, including xdist coverage.

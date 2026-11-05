@@ -48,6 +48,7 @@ class SpecDocSearchResult:
     tables: str | None
     chunk_index: int
     text: str
+    source_file: str = ""
 
 
 def _serialize_scalar(value: Any) -> Any:
@@ -80,6 +81,15 @@ def tdoc_search_result_to_dict(result: TDocSearchResult) -> dict[str, Any]:
                 "source_file": document.source_file,
                 "score": document.score,
                 "previews": document.previews,
+                "matched_chunk": (
+                    {
+                        "chunk_id": document.matched_chunk.chunk_id,
+                        "chunk_index": document.matched_chunk.chunk_index,
+                        "text": document.matched_chunk.text,
+                    }
+                    if document.matched_chunk is not None
+                    else None
+                ),
             }
             for document in result.matched_documents
         ],
@@ -95,6 +105,7 @@ def spec_doc_search_result_to_dict(result: SpecDocSearchResult) -> dict[str, Any
         "spec_id": result.spec_id,
         "version": result.version,
         "release": result.release,
+        "source_file": result.source_file,
         "sections": result.sections,
         "tables": result.tables,
         "chunk_index": result.chunk_index,

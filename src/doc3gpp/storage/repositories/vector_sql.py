@@ -22,27 +22,31 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import sqlite3
 from collections.abc import Collection, Iterable, Iterator, Sequence
 from itertools import groupby
 
 import numpy as np
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, event, text
 from sqlalchemy.engine import Connection, Engine, Row
 from sqlalchemy.exc import OperationalError
 
-from doc3gpp.models.search import SearchFilters, SearchIndexStatus, TDocMeta
-from doc3gpp.models.semantic_chunking import planned_document_keys
+from doc3gpp.models.search import MatchedChunk, SearchFilters, SearchIndexStatus, TDocMeta
+from doc3gpp.models.semantic_chunking import chunk_count
 from doc3gpp.models.semantic_search import (
     EmbeddedChunk,
+    VectorCandidate,
     VectorIndexUnavailableError,
+    content_chunking_fingerprint,
     parse_content_chunk_id,
 )
 from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.models.tdoc_document import ordered_sources
 from doc3gpp.repository.protocols import VectorIndexRepository
 from doc3gpp.settings.loader import get_settings
+from doc3gpp.settings.schema import SemanticSearchSettings
 from doc3gpp.storage.compression import decompress_json
-from doc3gpp.storage.db.session import get_engine
+from doc3gpp.storage.db.session import ensure_sqlite_read_transaction, get_engine
 from doc3gpp.storage.repositories.rich_filters import (
     build_text_filter_or_params,
     build_text_filter_sql,
@@ -83,6 +87,24 @@ def _check_sqlite_vec(engine: Engine) -> None:
             raise VectorIndexUnavailableError(
                 f"sqlite-vec extension load failed: {exc}"
             ) from exc
+    # sqlite-vec is registered per DBAPI connection, including connections
+    # that were already pooled before this repository was constructed.
+    if not event.contains(engine, "checkout", _load_vec_on_checkout):
+        event.listen(engine, "checkout", _load_vec_on_checkout)
+
+
+def _load_vec_on_checkout(dbapi_connection, _record, _proxy) -> None:
+    from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
+    try:
+        dbapi_connection.execute("SELECT vec_version()").fetchone()
+    except sqlite3.OperationalError:
+        load_sqlite_vec(dbapi_connection)
+
+
+def _ensure_read_transaction(conn: Connection) -> None:
+    """Keep the existing private wrapper around shared SQLite transaction logic."""
+    ensure_sqlite_read_transaction(conn)
 
 
 def _like_predicates(filters: SearchFilters) -> tuple[list[str], dict]:
@@ -201,13 +223,14 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         self,
         expected_model: str | None = None,
         expected_dim: int | None = None,
+        chunk_settings: SemanticSearchSettings | None = None,
     ) -> None:
         self._engine = get_engine()
         _check_sqlite_vec(self._engine)
         self._dim, self._stored_model = self._read_or_init_dim_and_model()
         self._expected_model = expected_model
         self._expected_dim = expected_dim
-        self._chunk_settings = get_settings().semantic_search
+        self._chunk_settings = chunk_settings or get_settings().semantic_search
 
     def _read_or_init_dim_and_model(self) -> tuple[int, str | None]:
         with self._engine.begin() as conn:
@@ -329,6 +352,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 )
             )
             conn.execute(text("DROP TABLE IF EXISTS vec_tdoc_embeddings"))
+            conn.execute(text("DELETE FROM vec_tdoc_chunk_text"))
             conn.execute(
                 text(
                     "CREATE VIRTUAL TABLE vec_tdoc_embeddings USING vec0(\n"
@@ -367,37 +391,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             self._check_compatible(v.shape[-1], what="upsert")
 
     def upsert_chunks(self, tdoc_id: str, chunks: Sequence[EmbeddedChunk]) -> None:
-        self._check_dim([chunk.embedding for chunk in chunks])
-        # Note: binds raw float32 bytes via sqlite-vec's BLOB conversion; equivalent to vec_bit(:emb).
-        with self._engine.begin() as conn:
-            conn.execute(
-                text("DELETE FROM vec_tdoc_embeddings WHERE tdoc_id = :id"),
-                {"id": tdoc_id},
-            )
-            row = conn.execute(
-                text(_TDOC_METADATA_SELECT + " WHERE t.tdoc_id = :id"),
-                {"id": tdoc_id},
-            ).first()
-            meeting_id, tsg, uploaded_date = _vec_metadata(
-                *(row[1:] if row is not None else (None, None, None)),
-            )
-            for chunk in chunks:
-                conn.execute(
-                    text(
-                        "INSERT INTO vec_tdoc_embeddings "
-                        "(chunk_id, tdoc_id, chunk_index, meeting_id, tsg, uploaded_date, embedding) "
-                        "VALUES (:cid, :tid, :ci, :mid, :tsg, :udate, :emb)"
-                    ),
-                    {
-                        "cid": chunk.chunk_id,
-                        "tid": tdoc_id,
-                        "ci": chunk.chunk_index,
-                        "mid": meeting_id,
-                        "tsg": tsg,
-                        "udate": uploaded_date,
-                        "emb": np.asarray(chunk.embedding, dtype=np.float32).tobytes(),
-                    },
-                )
+        self.upsert_chunks_many([(tdoc_id, list(chunks))])
 
     def upsert_chunks_many(self, items: list[tuple[str, list[EmbeddedChunk]]]) -> None:
         """Replace the chunks of every ``tdoc_id`` in one transaction; empty lists remove them."""
@@ -410,6 +404,10 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 placeholders = ", ".join(f":id_{i}" for i in range(len(batch_ids)))
                 conn.execute(
                     text(f"DELETE FROM vec_tdoc_embeddings WHERE tdoc_id IN ({placeholders})"),
+                    {f"id_{i}": v for i, v in enumerate(batch_ids)},
+                )
+                conn.execute(
+                    text(f"DELETE FROM vec_tdoc_chunk_text WHERE tdoc_id IN ({placeholders})"),
                     {f"id_{i}": v for i, v in enumerate(batch_ids)},
                 )
             metadata = _rows_for_tdocs(
@@ -441,9 +439,70 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                     ),
                     params,
                 )
+            snapshots = []
+            for tdoc_id, chunks in items:
+                for chunk in chunks:
+                    identity = parse_content_chunk_id(chunk.chunk_id)
+                    if identity is None or chunk.text is None or chunk.chunking_fingerprint is None:
+                        continue
+                    document_id, content_hash = identity
+                    if chunk.chunk_id != f"{tdoc_id}#{document_id}#{content_hash}#{chunk.chunk_index}":
+                        raise ValueError("content chunk identity does not match its parent or index")
+                    snapshots.append({
+                        "cid": chunk.chunk_id, "tid": tdoc_id, "did": document_id,
+                        "hash": content_hash, "ci": chunk.chunk_index,
+                        "fp": chunk.chunking_fingerprint, "body": chunk.text,
+                    })
+            if snapshots:
+                conn.execute(text(
+                    "INSERT INTO vec_tdoc_chunk_text "
+                    "(chunk_id, tdoc_id, document_id, content_hash, chunk_index, fingerprint, text) "
+                    "VALUES (:cid, :tid, :did, :hash, :ci, :fp, :body)"
+                ), snapshots)
 
     def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
         return self._indexed_state()[0]
+
+    def matched_chunk_texts(self, chunk_ids: Collection[str]) -> dict[str, MatchedChunk]:
+        ids = list(dict.fromkeys(chunk_ids))
+        if not ids:
+            return {}
+        with self._engine.begin() as conn:
+            _ensure_read_transaction(conn)
+            return self._matched_chunk_texts(conn, ids)
+
+    def _matched_chunk_texts(
+        self, conn: Connection, ids: list[str],
+    ) -> dict[str, MatchedChunk]:
+        if not ids:
+            return {}
+        settings = self._chunk_settings
+        fingerprint = content_chunking_fingerprint(
+            settings.chunk_size, settings.chunk_overlap, settings.max_content_chunks_per_tdoc,
+        )
+        result: dict[str, MatchedChunk] = {}
+        if not conn.execute(text(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vec_tdoc_chunk_text'"
+        )).first():
+            return {}
+        tdoc_ids = list({cid.split("#", 1)[0] for cid in ids if parse_content_chunk_id(cid)})
+        expected = self._expected_content_chunk_ids(conn, tdoc_ids)
+        for start in range(0, len(ids), 500):
+            batch = ids[start:start + 500]
+            placeholders = ", ".join(f":id_{i}" for i in range(len(batch)))
+            rows = conn.execute(text(
+                "SELECT s.chunk_id, s.tdoc_id, s.document_id, s.content_hash, "
+                "s.chunk_index, s.fingerprint, s.text "
+                "FROM vec_tdoc_chunk_text s JOIN vec_tdoc_embeddings v "
+                "ON v.chunk_id = s.chunk_id AND v.tdoc_id = s.tdoc_id "
+                "AND v.chunk_index = s.chunk_index "
+                f"WHERE s.chunk_id IN ({placeholders})"
+            ), {f"id_{i}": value for i, value in enumerate(batch)})
+            for cid, tid, did, content_hash, index, fp, body in rows:
+                if (fp == fingerprint and cid in (expected.get(tid) or set())
+                        and cid == f"{tid}#{did}#{content_hash}#{index}"):
+                    result[cid] = MatchedChunk(cid, index, body)
+        return result
 
     def embed_text_for_tdoc(self, tdoc_id: str) -> str | None:
         return _build_embed_text(tdoc_id)
@@ -488,6 +547,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 text("DELETE FROM vec_tdoc_embeddings WHERE tdoc_id = :id"),
                 {"id": tdoc_id},
             )
+            conn.execute(text("DELETE FROM vec_tdoc_chunk_text WHERE tdoc_id = :id"), {"id": tdoc_id})
 
     def knn(
         self, query_vec: np.ndarray, limit: int,
@@ -517,8 +577,15 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         # Note: binds raw float32 bytes via sqlite-vec's BLOB conversion; equivalent to vec_bit(:q).
         sql.append("  ORDER BY distance IS NULL, distance ASC, chunk_id ASC")
         with self._engine.begin() as conn:
+            _ensure_read_transaction(conn)
             rows = conn.execute(text("\n".join(sql)), params).all()
-        return [(r[1], r[0], int(r[2]), float(r[3]) if r[3] is not None else float("inf")) for r in rows]
+            chunks = self._matched_chunk_texts(conn, [r[0] for r in rows])
+        return [
+            VectorCandidate(r[1], r[0], int(r[2]),
+                            float(r[3]) if r[3] is not None else float("inf"),
+                            chunks.get(r[0]))
+            for r in rows
+        ]
 
     def matching_tdoc_ids(
         self, tdoc_ids: Collection[str], filters: SearchFilters,
@@ -760,14 +827,25 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         decoded) is always stale, so one such row is reported for its own TDoc and
         does not abort the other TDocs.
         """
-        expected = self._expected_content_signatures()
-        actual, indexed_metadata = self._indexed_state()
+        _, indexed_metadata = self._indexed_state()
         with self._engine.begin() as conn:
+            expected_chunks = self._expected_content_chunk_ids(conn)
             rows = conn.execute(text(_TDOC_METADATA_SELECT)).all()
+            indexed_chunks = conn.execute(text(
+                "SELECT tdoc_id, chunk_id FROM vec_tdoc_embeddings"
+            )).all()
+        content_ids: dict[str, set[str]] = {}
+        for tid, cid in indexed_chunks:
+            if parse_content_chunk_id(cid) is not None:
+                content_ids.setdefault(tid, set()).add(cid)
+        verified = self.matched_chunk_texts([
+            cid for ids in content_ids.values() for cid in ids
+        ])
         stale: set[str] = set()
         for tdoc_id, meeting_id, tsg, uploaded_date in rows:
-            signature = expected.get(tdoc_id, frozenset())
-            if signature is None or signature != actual.get(tdoc_id, frozenset()):
+            planned = expected_chunks.get(tdoc_id, set())
+            actual_ids = content_ids.get(tdoc_id, set())
+            if planned is None or planned != actual_ids or not actual_ids <= verified.keys():
                 stale.add(tdoc_id)
                 continue
             stored = indexed_metadata.get(tdoc_id)
@@ -775,36 +853,38 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 stale.add(tdoc_id)
         return stale
 
-    def _expected_content_signatures(
-        self,
-    ) -> dict[str, frozenset[tuple[str, str]] | None]:
-        """Return the content signatures a fresh index holds, per TDoc.
-
-        Uses the same plan as :meth:`SemanticSearchService.index_for_tdoc`, so a
-        blank document or one past the content cap has no expected signature.
-        The plan reads each row's stored ``token_count`` and never decompresses
-        ``content``. A ``None`` value marks a TDoc with any NULL ``token_count``.
-        """
+    def _expected_content_chunk_ids(
+        self, conn: Connection, tdoc_ids: list[str] | None = None,
+    ) -> dict[str, set[str] | None]:
+        """Plan exact indexed identities from SQL token counts and the shared cap."""
         settings = self._chunk_settings
-        expected: dict[str, frozenset[tuple[str, str]] | None] = {}
-        with self._engine.begin() as conn:
+        expected: dict[str, set[str] | None] = {}
+        if tdoc_ids is None:
             rows = conn.execute(text(_STATUS_CONTENT_ROWS_SQL))
-            for tdoc_id, group in groupby(rows, key=lambda row: row.tdoc_id):
-                ordered = list(_ordered_rows(list(group)))
-                if any(row.token_count is None for row in ordered):
-                    expected[tdoc_id] = None
-                    continue
-                expected[tdoc_id] = frozenset(
-                    planned_document_keys(
-                        (
-                            (row.document_id, row.content_hash, row.token_count)
-                            for row in ordered
-                        ),
-                        settings.chunk_size,
-                        settings.chunk_overlap,
-                        settings.max_content_chunks_per_tdoc,
-                    )
+            grouped = ((tid, list(group)) for tid, group in groupby(rows, key=lambda r: r.tdoc_id))
+        else:
+            grouped = _rows_for_tdocs(
+                conn, _STATUS_CONTENT_ROWS_FOR_TDOCS_SQL, tdoc_ids,
+            ).items()
+        for tid, group in grouped:
+            ordered = list(_ordered_rows(group))
+            if any(row.token_count is None for row in ordered):
+                expected[tid] = None
+                continue
+            remaining = settings.max_content_chunks_per_tdoc
+            ids: set[str] = set()
+            for row in ordered:
+                count = min(remaining, chunk_count(
+                    row.token_count, settings.chunk_size, settings.chunk_overlap,
+                ))
+                ids.update(
+                    f"{tid}#{row.document_id}#{row.content_hash}#{i}"
+                    for i in range(count)
                 )
+                remaining -= count
+                if remaining <= 0:
+                    break
+            expected[tid] = ids
         return expected
 
     def get_tdocs_metadata(
@@ -905,11 +985,12 @@ def _rows_for_tdocs(
 ) -> dict[str, list[Row]]:
     """Run ``template`` once per chunk of ``tdoc_ids`` and group rows by their first column.
 
-    ``template`` holds an ``{ids}`` placeholder for the bound ``IN`` list. Chunks of 500
-    keep the bound-parameter count under SQLite's default limit.
+    ``template`` holds one or more ``{ids}`` placeholders. SQLAlchemy expands
+    repeated named parameters into separate positional binds, so each repeated
+    placeholder consumes another batch's worth of SQLite variables.
     """
     grouped: dict[str, list[Row]] = {}
-    chunk_size = 500
+    chunk_size = min(500, 999 // max(template.count("{ids}"), 1))
     for start in range(0, len(tdoc_ids), chunk_size):
         chunk = tdoc_ids[start:start + chunk_size]
         placeholders = ", ".join(f":id_{i}" for i in range(len(chunk)))
@@ -1046,6 +1127,9 @@ def _content_rows_sql(*, where: str = "", status_only: bool = False) -> str:
 _CONTENT_ROWS_SQL = _content_rows_sql()
 _CONTENT_ROWS_FOR_TDOCS_SQL = _content_rows_sql(where=" WHERE e.tdoc_id IN ({ids})")
 _STATUS_CONTENT_ROWS_SQL = _content_rows_sql(status_only=True)
+_STATUS_CONTENT_ROWS_FOR_TDOCS_SQL = _content_rows_sql(
+    where=" WHERE e.tdoc_id IN ({ids})", status_only=True,
+)
 
 
 class UndecodableContentError(ValueError):

@@ -145,6 +145,7 @@ class SpecDocHit:
     text: str
     score: float
     previews: dict[str, str]
+    source_file: str = ""
 
 
 @dataclass(slots=True)

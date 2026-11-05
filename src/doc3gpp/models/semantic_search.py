@@ -11,7 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from doc3gpp.models.search import SearchError, SearchHit
+from doc3gpp.models.search import MatchedChunk, SearchError, SearchHit
+from doc3gpp.models.semantic_chunking import chunking_fingerprint
+
+
+def content_chunking_fingerprint(size: int, overlap: int, cap: int) -> str:
+    """Identify the content chunk algorithm, settings and shared per-TDoc cap."""
+    return f"{chunking_fingerprint(size, overlap)}:cap={cap}"
 
 
 class SemanticSearchError(SearchError):
@@ -43,6 +49,25 @@ class EmbeddedChunk:
     chunk_id: str
     chunk_index: int
     embedding: Any
+    text: str | None = None
+    chunking_fingerprint: str | None = None
+
+
+class VectorCandidate(tuple):
+    """Four-tuple KNN row with text verified in the scoring read snapshot.
+
+    Tuple unpacking remains ``tdoc_id, chunk_id, chunk_index, distance``.
+    The optional ``matched_chunk`` must travel with the candidate; a later
+    ID-only lookup cannot establish which vector generation was scored.
+    """
+
+    matched_chunk: MatchedChunk | None
+
+    def __new__(cls, tdoc_id: str, chunk_id: str, chunk_index: int, distance: float,
+                matched_chunk: MatchedChunk | None = None):
+        value = super().__new__(cls, (tdoc_id, chunk_id, chunk_index, distance))
+        value.matched_chunk = matched_chunk
+        return value
 
 
 @dataclass(slots=True, frozen=True)
@@ -52,6 +77,7 @@ class SemanticDocumentHit:
     document_id: str
     chunk_id: str
     distance: float
+    matched_chunk: MatchedChunk | None = None
 
 
 def parse_content_chunk_id(chunk_id: str) -> tuple[str, str] | None:

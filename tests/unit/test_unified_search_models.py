@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from doc3gpp.models.search import MatchedDocument
+from doc3gpp.models.search import MatchedChunk, MatchedDocument
 from doc3gpp.models.unified_search import (
     SearchMode,
     SpecDocSearchResult,
@@ -38,6 +38,7 @@ SPECDOC_KEYS = [
     "spec_id",
     "version",
     "release",
+    "source_file",
     "sections",
     "tables",
     "chunk_index",
@@ -155,6 +156,11 @@ def test_tdoc_serializer_preserves_matched_document_provenance_as_json() -> None
             source_file="docs/main.docx",
             score=-4.25,
             previews={"content_text": "<<handover>> procedure"},
+            matched_chunk=MatchedChunk(
+                chunk_id="doc-main#1",
+                chunk_index=1,
+                text="main presentation content",
+            ),
         ),
         MatchedDocument(
             document_id="doc-appendix",
@@ -179,6 +185,11 @@ def test_tdoc_serializer_preserves_matched_document_provenance_as_json() -> None
             "source_file": "docs/main.docx",
             "score": -4.25,
             "previews": {"content_text": "<<handover>> procedure"},
+            "matched_chunk": {
+                "chunk_id": "doc-main#1",
+                "chunk_index": 1,
+                "text": "main presentation content",
+            },
         },
         {
             "document_id": "doc-appendix",
@@ -186,6 +197,7 @@ def test_tdoc_serializer_preserves_matched_document_provenance_as_json() -> None
             "source_file": "support/appendix.docx",
             "score": -2.0,
             "previews": {"content_text": "<<handover>> appendix"},
+            "matched_chunk": None,
         },
     ]
 
@@ -242,6 +254,7 @@ def test_spec_doc_result_has_exact_keys_and_preserves_none():
         "spec_id": "38.331",
         "version": "18.5.0",
         "release": "Rel-18",
+        "source_file": "",
         "sections": "5.1 Handover",
         "tables": "Table 1 Values",
         "chunk_index": 0,

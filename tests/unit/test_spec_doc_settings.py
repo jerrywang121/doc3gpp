@@ -44,7 +44,16 @@ def test_spec_doc_explicit_absolute_cache_dir_is_preserved(tmp_path):
 
 
 def test_spec_doc_output_fields_use_combined_metadata():
-    assert Settings().output.fields.spec_doc[3:5] == ["sections", "tables"]
+    assert Settings().output.fields.spec_doc == [
+        "spec_id",
+        "version",
+        "release",
+        "source_file",
+        "sections",
+        "tables",
+        "chunk_index",
+        "text",
+    ]
 
 
 def test_resolve_specdata_sibling(tmp_path, monkeypatch):

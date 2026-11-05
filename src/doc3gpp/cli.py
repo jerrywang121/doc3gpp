@@ -789,6 +789,9 @@ def _render_unified_tdoc_results(
                 )
                 if previews:
                     label = f"{label} — {previews}"
+                if document.matched_chunk is not None:
+                    chunk = document.matched_chunk
+                    label = f"{label} — chunk {chunk.chunk_index}: {chunk.text}"
                 documents.append(label)
             row[matched_index] = " | ".join(documents) or "-"
     if format == "markdown":
@@ -5480,6 +5483,7 @@ SPEC_DOC_SEARCH_FIELDS: list[str] = [
     "spec_id",
     "version",
     "release",
+    "source_file",
     "sections",
     "tables",
     "chunk_index",

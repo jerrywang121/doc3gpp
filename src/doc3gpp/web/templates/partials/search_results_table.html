@@ -21,7 +21,11 @@
           <td>
             {% if hit.matched_documents %}
               {% for document in hit.matched_documents %}
-                <a href="/tdocs/by-url/content?ftp_url={{ document.ftp_url | urlencode }}&amp;source_file={{ document.source_file | urlencode }}">{{ document.source_file }}</a>{% if not loop.last %}<br>{% endif %}
+                <a href="/tdocs/by-url/content?ftp_url={{ document.ftp_url | urlencode }}&amp;source_file={{ document.source_file | urlencode }}">{{ document.source_file }}</a>
+                {% if document.matched_chunk %}
+                  <pre class="matched-chunk">{{ document.matched_chunk.text }}</pre>
+                {% endif %}
+                {% if not loop.last %}<br>{% endif %}
               {% endfor %}
             {% else %}-{% endif %}
           </td>

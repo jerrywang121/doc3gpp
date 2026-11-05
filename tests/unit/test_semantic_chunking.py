@@ -58,3 +58,10 @@ def test_planned_document_keys_matches_plan_content_chunks() -> None:
         ]
 
         assert planned_document_keys(with_tokens, 5, 2, max_chunks) == expected, max_chunks
+
+
+def test_chunking_fingerprint_distinguishes_settings() -> None:
+    from doc3gpp.models.semantic_chunking import chunking_fingerprint
+
+    assert chunking_fingerprint(4, 0) == "semantic-whitespace-v1:4:0"
+    assert chunking_fingerprint(4, 1) == "semantic-whitespace-v1:4:1"

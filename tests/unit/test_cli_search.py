@@ -61,6 +61,7 @@ SPEC_DOC_KEYS = [
     "spec_id",
     "version",
     "release",
+    "source_file",
     "sections",
     "tables",
     "chunk_index",
@@ -146,6 +147,7 @@ def _spec_doc_result(mode: SearchMode, *, previews: dict[str, str] | None) -> Sp
         spec_id="38.331",
         version="18.5.0",
         release="Rel-18",
+        source_file="Annexes/Radio Slides.PPTX",
         sections="5.1 Handover",
         tables="Table 1 Values",
         chunk_index=0,
@@ -217,6 +219,7 @@ def test_tdoc_search_direct_uses_facade_and_emits_exact_fts5_payload(monkeypatch
             "source_file": "docs/main.docx",
             "score": -4.5,
             "previews": {"content_text": "<<handover>> procedure"},
+            "matched_chunk": None,
         },
         {
             "document_id": "doc-appendix",
@@ -224,6 +227,7 @@ def test_tdoc_search_direct_uses_facade_and_emits_exact_fts5_payload(monkeypatch
             "source_file": "support/appendix.docx",
             "score": -2.25,
             "previews": {"content_text": "<<handover>> appendix"},
+            "matched_chunk": None,
         },
     ]
     call = facade.search.call_args.kwargs
@@ -667,6 +671,7 @@ def test_spec_doc_search_direct_uses_facade_offset_fields_and_flat_payload(monke
     payload = json.loads(result.stdout)
     assert list(payload[0]) == SPEC_DOC_KEYS
     assert payload[0]["score"] == 2.5
+    assert payload[0]["source_file"] == "Annexes/Radio Slides.PPTX"
     assert payload[0]["search_mode"] == "fts5"
     assert payload[0]["previews"] == {"text": "<<handover>>"}
     filters = facade.search.call_args.kwargs["filters"]
@@ -696,6 +701,7 @@ def test_spec_doc_search_accepts_semantic_and_field_only_modes(monkeypatch) -> N
         assert result.exit_code == 0, result.output
         payload = json.loads(result.stdout)[0]
         assert list(payload) == SPEC_DOC_KEYS
+        assert payload["source_file"] == "Annexes/Radio Slides.PPTX"
         assert payload["search_mode"] == mode.value
         assert payload["previews"] is None
 
@@ -727,6 +733,138 @@ def test_spec_doc_table_and_markdown_honor_explicit_fields(monkeypatch) -> None:
         assert "score" in result.output
         assert "search_mode" in result.output
         assert "previews" not in result.output
+
+
+
+def test_search_presentation_source_and_chunk_cli_formats(monkeypatch) -> None:
+    from doc3gpp.models.search import MatchedChunk
+    from doc3gpp.settings.schema import Settings
+
+    source_file = "Annexes/Radio Slides.PPTX"
+    chunk_text = "complete slide chunk: inter-cell handover beam report"
+    ftp_url = "https://www.3gpp.org/ftp/R5-260001.zip"
+    tdoc_result = TDocSearchResult(
+        tdoc_id="R5-260001",
+        score=0.42,
+        search_mode=SearchMode.SEMANTIC,
+        previews=None,
+        title="Radio presentation",
+        meeting="RAN5#108",
+        tsg="R5",
+        uploaded_date="2026-01-02",
+        ftp_url=ftp_url,
+        wis=None,
+        type="CR",
+        status="Approved",
+        best_chunk_id="R5-260001#0",
+        matched_documents=(
+            MatchedDocument(
+                document_id="doc-presentation",
+                ftp_url=ftp_url,
+                source_file=source_file,
+                score=-0.5,
+                previews={},
+                matched_chunk=MatchedChunk(
+                    chunk_id="R5-260001#doc-presentation#0",
+                    chunk_index=0,
+                    text=chunk_text,
+                ),
+            ),
+        ),
+    )
+    spec_doc_result = SpecDocSearchResult(
+        chunk_id="38.331@18.5.0#0",
+        score=0.42,
+        search_mode=SearchMode.SEMANTIC,
+        previews=None,
+        spec_id="38.331",
+        version="18.5.0",
+        release="Rel-18",
+        sections=None,
+        tables=None,
+        chunk_index=0,
+        text=chunk_text,
+        source_file=source_file,
+    )
+    settings = Settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    tdoc_facade = MagicMock()
+    tdoc_facade.search.return_value = [tdoc_result]
+    spec_doc_facade = MagicMock()
+    spec_doc_facade.search.return_value = [spec_doc_result]
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: tdoc_facade,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_spec_doc_search_facade",
+        lambda: spec_doc_facade,
+    )
+
+    formats = (
+        ("table", []),
+        ("markdown", []),
+        ("markdown", ["--compact"]),
+        ("json", ["--compact"]),
+    )
+    searches = (
+        ("TDoc", ["tdoc", "search", "--semantic", "presentation"]),
+        (
+            "spec document",
+            ["spec", "doc", "search", "--semantic", "presentation"],
+        ),
+    )
+    for corpus, command in searches:
+        for fmt, extra in formats:
+            result = runner.invoke(
+                app, [*command, "--format", fmt, *extra]
+            )
+            assert result.exit_code == 0, f"{corpus} {fmt}: {result.output}"
+            assert source_file in result.stdout, f"{corpus} {fmt}: {result.stdout}"
+            assert chunk_text in result.stdout, f"{corpus} {fmt}: {result.stdout}"
+            if fmt == "json":
+                payload = json.loads(result.stdout)
+                if corpus == "TDoc":
+                    assert payload[0]["matched_documents"][0]["matched_chunk"] == {
+                        "chunk_id": "R5-260001#doc-presentation#0",
+                        "chunk_index": 0,
+                        "text": chunk_text,
+                    }
+                else:
+                    assert payload[0]["source_file"] == source_file
+                    assert payload[0]["text"] == chunk_text
+
+    source_only = runner.invoke(
+        app,
+        [
+            "spec", "doc", "search", "--semantic", "presentation",
+            "--fields", "source_file", "--format", "table",
+        ],
+    )
+    assert source_only.exit_code == 0, source_only.output
+    assert source_file in source_only.stdout
+    assert "spec_id" not in source_only.stdout
+
+    explicit_fields = runner.invoke(
+        app,
+        [
+            "spec", "doc", "search", "--semantic", "presentation",
+            "--fields", "spec_id,text", "--format", "table",
+        ],
+    )
+    assert explicit_fields.exit_code == 0, explicit_fields.output
+    assert chunk_text in explicit_fields.stdout
+    assert source_file not in explicit_fields.stdout
+
+    settings.output.fields.spec_doc = ["spec_id", "text"]
+    configured_fields = runner.invoke(
+        app,
+        ["spec", "doc", "search", "--semantic", "presentation", "--format", "table"],
+    )
+    assert configured_fields.exit_code == 0, configured_fields.output
+    assert chunk_text in configured_fields.stdout
+    assert source_file not in configured_fields.stdout
 
 
 def test_spec_doc_search_preserves_established_unavailable_messages(monkeypatch) -> None:

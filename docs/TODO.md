@@ -1,42 +1,60 @@
-# TODO
+# Engineering backlog
 
-Open improvement backlog from the repository review at commit `c0af0ee`.
-The review was read-only; the findings below have not been implemented.
+This is proposed work, not the current interface. Current operational limits
+are in [known-constraints.md](known-constraints.md). References use modules and
+symbols rather than historical source line numbers.
 
-## Critical
+## Security and deployment
 
-- [ ] **Add HTTP and MCP authentication and authorization.** References: `src/doc3gpp/web/app.py:154-185`, `:224-235`; `src/doc3gpp/web/routes/jobs.py:157-341`, `:454-583`; `src/doc3gpp/cli_server.py:207-265`. Protect corpus reads, job inspection, sync, parse, indexing, cache purge, and cancellation. Treat host/origin checks as transport controls, not identity. Refuse non-loopback binding unless an explicit authentication mechanism is configured. Add tests for unauthenticated and authorized read/mutating requests.
-- [x] **Prevent stored XSS in cached TDoc content.** References: `src/doc3gpp/web/routes/tdocs.py:86`, `:439-455`; `src/doc3gpp/web/templates/tdoc_content.html:6`. Disable raw HTML in Markdown rendering or sanitize rendered HTML with a strict allowlist before using `safe`. Add a regression test with `<script>` and event-handler payloads. Fixed: the shared Markdown renderer in `web/routes/tdocs.py` now has `html` disabled, with one inline rule that re-allows only the exact `<ins>`/`<del>` revision tags. The `tdoc_show.html` change-block text uses a new `revision_markup` filter in `web/templates_setup.py` (escape, then restore only those four tags) instead of `| safe`. The MCP content renderer shares the same Markdown renderer.
+- [ ] Add HTTP/MCP authentication and authorization for reads, jobs, purge,
+  cancellation, and mutations; reject unsafe public binding or require an
+  explicit deployment policy (`web/app.py`, routes, MCP registration).
+- [ ] Enforce a single worker process or introduce ownership/leases/heartbeats
+  and stale-only recovery. Guard terminal transitions against stale owners
+  (`JobWorker`, `SQLAlchemyJobRepository`).
+- [ ] Apply a deliberate dotenv/file-secret policy consistent with process-env
+  filtering, with regression tests (`Settings.settings_customise_sources`).
+- [ ] Align user-config initialization with XDG-aware discovery; currently
+  initialization writes the fixed `~/.config` path even with `XDG_CONFIG_HOME`.
+- [ ] Audit persisted cache-key validation/root containment on Windows as well
+  as Unix, including both separator styles (`scraping/cache.py`, content readers).
 
-## Important
+## Data integrity and search
 
-- [x] **Make queued job cancellation durable.** References: `src/doc3gpp/web/state.py:88-115`; `src/doc3gpp/web/routes/jobs.py:558-583`. Persist cancellation state or atomically transition queued jobs to `CANCELLED`, and ensure the worker claims only still-queued rows. Add restart and worker-unavailable tests. Fixed: a cancel of a queued job is now one conditional update (`JobRepository.cancel_if_queued`, `WHERE status = 'queued'`) shared by the HTTP route and the MCP tool through `request_cancel` in `web/routes/jobs.py`. Only a running job's handler event is signalled. The in-memory pending-cancel set in `JobWorkerHandle` was removed, so a cancel no longer depends on the process staying up. The worker's `mark_running` guard skips a job cancelled after it was listed. Tests: repository conditional transition, route cancel with no worker, restart, and claim-after-cancel.
-- [ ] **Make job ownership and orphan recovery safe for multiple processes.** References: `src/doc3gpp/web/workers/job_worker.py:195-223`; `src/doc3gpp/cli_server.py:214-255`; `src/doc3gpp/storage/repositories/jobs_sql.py:162-225`. Add worker ownership, leases, and heartbeats with stale-only recovery, or enforce a process singleton. Require `status = 'running'` in terminal status transitions so an old worker cannot overwrite newer state.
-- [ ] **Fix double compilation of hybrid FTS5 queries.** References: `src/doc3gpp/services/tdoc_search_facade.py:59-74`; `src/doc3gpp/services/semantic_search_service.py:172-183`; `src/doc3gpp/services/search_service.py:125-133`. Establish one explicit raw-query versus compiled-expression boundary. Add hybrid regression tests for TDoc IDs such as `R5-123456` and dotted spec IDs.
-- [ ] **Make the MCP TDoc content tool use the authoritative cache reader.** References: `src/doc3gpp/web/mcp_server.py:443-469`; `src/doc3gpp/web/routes/tdocs.py:416-437`; `src/doc3gpp/services/tdoc_cr_service.py:153-176`. Read current ZIP Markdown sidecars, legacy gzip entries, and plain UTF-8 through the shared helper, using the persisted `tdoc_extracts.cache_file` key. Add a test for a ZIP Markdown sidecar and direct URL parsing.
-- [ ] **Make document parse persistence atomic or recoverable.** References: `src/doc3gpp/services/spec_doc_service.py:277-306`; `src/doc3gpp/storage/repositories/spec_doc_sql.py:114-238`; `src/doc3gpp/services/tdoc_cr_service.py:675-710`. Use a per-document database transaction or unit of work, stage and atomically replace filesystem artifacts, and update search indexes only after durable relational and cache state is committed. Add failure-injection tests for partial TOC/chunk/cache writes and TDoc extraction sidecars.
-- [ ] **Enforce the documented settings source allowlist for dotenv files.** References: `src/doc3gpp/settings/schema.py:58-70`, `:73-97`, `:924-963`. Apply the same filtering to dotenv and file-secret sources, or explicitly document the broader precedence policy. Add tests proving that TOML-only server/MCP settings cannot be injected through `.env` if that restriction remains intended.
-- [ ] **Make vector schema initialization dimension-aware.** References: `src/doc3gpp/storage/db/migrate.py:298-350`, `:409-458`; `src/doc3gpp/services/factory.py:697-715`. Configure or discover embedding dimension before creating vector tables, record the dimension with the index, and support model/dimension changes during rebuild. Add clean-database and rebuild tests using a non-384-dimensional embedder.
-- [ ] **Remove stale auxiliary TDoc rows after confirmed upstream listings.** References: `src/doc3gpp/services/tdoc_file_service.py:29-68`; `src/doc3gpp/storage/repositories/tdoc_file_sql.py:150-163`; `src/doc3gpp/repository/protocols.py:590-598`. Replace rows for affected TDoc IDs in one transaction after a complete successful listing. Do not delete rows after partial or failed network results.
-- [ ] **Verify and resolve the `spec sync --tsg --force` contract.** References: `src/doc3gpp/cli.py:4639-4771`; `src/doc3gpp/services/spec_service.py:84-176`, `:299-307`. The CLI advertises `--force`, but the TSG sweep appears not to pass it to the per-spec skip logic. Confirm intended behavior, then either propagate `force` and test a recently synced spec or correct the help and documentation.
+- [ ] Propagate TSG sweep `force` into per-spec interval checks and add recent-spec
+  CLI/queued regressions (`SpecService.sync`, `_sync_one_spec`). Single-spec force
+  already works; see the documented mismatch in known constraints.
+- [ ] Forward CLI single-file URL `--force` to direct extraction and test refresh
+  of an already-complete historical URL (`_tdoc_parse_direct`).
+- [ ] Make vector initialization/model changes dimension-aware, including clean
+  databases with non-384-dimensional embedders (`storage/db/migrate.py`, factories).
+- [ ] Improve recovery across SQL, cache, TOC/source ledgers, and index updates.
+  Per-TDoc bundles and spec chunks/full presentations already have atomic SQL
+  replacements; test the remaining boundaries with failure injection.
+- [ ] Replace stale auxiliary TDoc rows only after a confirmed complete successful
+  listing (`TDocFileService`, auxiliary repository).
+- [ ] Audit raw-vs-compiled FTS query boundaries in hybrid search and retain
+  regressions for hyphenated TDoc IDs/dotted spec IDs before changing behavior.
+- [ ] Review snapshot/chunk-policy freshness and old-URL retention policies;
+  document any cleanup/rebuild contract before introducing automatic deletion.
 
-## Minor
+## Verification
 
-- [ ] **Centralize cache-key validation and enforce root containment on Windows.** References: `src/doc3gpp/storage/cache.py:13-15`; `src/doc3gpp/models/tdoc_cr.py:266-285`; `src/doc3gpp/web/routes/tdocs.py:111-125`, `:416-431`. Reject both slash styles and unsafe traversal, validate persisted cache names, and verify every resolved path remains under the configured cache root.
-- [x] **Close the shared remote embedder during application shutdown.** References: `src/doc3gpp/web/app.py:49-58`, `:217-222`; `src/doc3gpp/services/embedding/remote_embedder.py:96-97`. Store the embedder in `WebState` or register an explicit shutdown callback that calls `close()`. Fixed: `build_state` now defines `close_shared_embedder`, which closes the lazily built embedder only if one was created, and stores it on `WebState.close_embedder`. The lifespan calls it after `handle.shutdown()` and before the engines are disposed. Test: `test_lifespan_closes_shared_embedder_on_shutdown` in `tests/unit/test_web_app.py`.
-- [x] **Avoid writing embedding bearer tokens into project TOML by default.** References: `src/doc3gpp/cli.py` (`config_set`); `src/doc3gpp/settings/config_writer.py` (`write_toml`). Prefer environment configuration, warn when writing sensitive settings, and use restrictive permissions for user configuration files. Fixed: `config set semantic_search.embedding_api_key` now refuses to write into any config file other than the user config (the error names `DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY`), unless `--allow-plaintext-secret` is passed. A written secret prints a plain-text warning. The user config and any secret write are set to mode `0600` before the content is written. `--dry-run` is unchanged. Tests: `tests/unit/test_config_secret_writes.py`.
-- [x] **Make `config set` writes atomic.** Reference: `src/doc3gpp/settings/config_writer.py` (`write_toml`). Use a temporary file, flush/fsync, and `os.replace`, matching the safer `config init` implementation in `src/doc3gpp/cli.py` (`config_init`). Fixed: `write_text_atomic` in `config_writer.py` now provides the temp file, fsync, and `os.replace` steps. `write_toml` serialises before it touches the file, so a failed serialisation keeps the original file. `config init` uses the same helper, and `config set` no longer `chmod`s before writing. Tests: `tests/unit/test_config_file_writes.py`.
-- [x] **Make the snapshot-day index probe cheap.** Reference: `src/doc3gpp/storage/repositories/vector_sql.py:667-684` (`_has_unindexed_snapshot_day_tdoc`, called from `status()` at about line 653). The `NOT EXISTS` lookup on `vec_tdoc_embeddings` runs once per TDoc uploaded on the snapshot day. It costs about 0.23 s of `status()` at N=800 on the measurement host, after the token_count fix. Replace it with one set-based query (for example a `LEFT JOIN` or a single `SELECT tdoc_id FROM vec_tdoc_embeddings` lookup for the day) and re-measure with `/tmp/opencode/m4/measure.py` or an equivalent. Fixed: the probe is now one non-correlated `NOT IN` query, because `vec_tdoc_embeddings.tdoc_id` is a non-key `vec0` column and the correlated `NOT EXISTS` scanned the vector table once per TDoc. At N=800 the probe went from about 500 ms to 3 ms, and `status()` from about 527 ms to 11 ms.
+- [ ] Continue fixture/settings/engine-cache isolation audit, including offline
+  auto-sync mocks and xdist on Windows.
+- [ ] Add a deterministic offline lint/test CI matrix; release publication alone
+  is not test coverage.
 
-## Test And CI Follow-Up
+## Resolved or superseded review items
 
-- [x] **Verify xdist on Windows.** Fixed: the collection divergence ("Different tests were collected between gwN and gwM") under `-n auto`. Its root cause was `tests/unit/test_tdoc_zip.py::_make_zip`, which stamped wall-clock time into each ZIP entry, so parametrize IDs embedded different bytes per worker. The helper now writes fixed 1980 entry timestamps and the gzip parametrize value uses `mtime=0`. On WSL2 (22 cores), `python -m pytest -n auto -m "not online"` passes: `3154 passed, 1 skipped`, no collection errors. A Windows `-n auto` run was reported passing. The earlier `no such table: meetings` failures in `tests/unit/test_tdoc_cli_fields.py` and the `WinError 1920` failure in `tests/unit/test_cr_parser.py` were not re-checked individually. `scripts/test_sqlite.sh` uses `-n auto` when xdist is installed.
-- [ ] **Audit fixture/cache isolation.** Audit global engine/settings caches for the missing-table symptom (`no such table: meetings`).
-## Suggested Order
+Do not reopen these based only on an older design/review:
 
-1. Keep the server loopback-only until authentication, authorization, and XSS protections are in place.
-2. Make job cancellation and worker ownership durable before supporting multiple server processes.
-3. Fix the FTS query boundary and MCP cache reader, with regression tests.
-4. Make document persistence and cache replacement transactional or recoverable.
-5. Make vector schema initialization dimension-aware.
-6. Harden cache-key validation and atomic configuration writes.
+- Queued cancellation is durable and conditional; terminal cancel is idempotent.
+- HTTP/MCP TDoc content shares `TDocContentService` and the authoritative readers.
+- Markdown/raw upstream HTML is escaped or constrained by shared rendering.
+- The web lifespan closes its lazy shared embedder after draining jobs.
+- Config writes are atomic/permission-aware, and project secret writes require
+  explicit opt-in.
+- The vector snapshot-day probe is set-based; old scratch benchmark numbers are
+  not a current performance guarantee.
+- ZIP/gzip fixture timestamps were made deterministic for xdist collection.

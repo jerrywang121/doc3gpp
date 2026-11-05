@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
+from dataclasses import replace
 from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from doc3gpp.models.search import SearchFilters
+from doc3gpp.models.semantic_search import EmbeddedChunk
 from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES, TDocContentStore
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
 from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
@@ -420,8 +423,12 @@ def test_chunk_hit_matched_document_resolves_source_and_url(sqlite_env) -> None:
 
     annex_id = document_id_for(_WID_URL, _WID_ANNEX)
     matched = {doc.document_id: doc for doc in results[0].matched_documents}
-    assert matched[annex_id].ftp_url == _WID_URL
-    assert matched[annex_id].source_file == _WID_ANNEX
+    annex_match = matched[annex_id]
+    assert annex_match.ftp_url == _WID_URL
+    assert annex_match.source_file == _WID_ANNEX
+    assert annex_match.matched_chunk is not None
+    assert annex_match.matched_chunk.chunk_id.startswith(f"{_WID_ID}#{annex_id}#")
+    assert NEEDLE in annex_match.matched_chunk.text
 
 
 def test_rebuild_embeddings_with_cache_purged_uses_sql(sqlite_env, monkeypatch, tmp_path) -> None:
@@ -436,3 +443,433 @@ def test_rebuild_embeddings_with_cache_purged_uses_sql(sqlite_env, monkeypatch, 
     annex_id = document_id_for(_WID_URL, _WID_ANNEX)
     assert f"{_WID_ID}#{annex_id}#{_sha(annex_markdown)}#0" in _chunk_ids(_WID_ID)
     assert not (tmp_path / ".cache").exists()
+
+
+def _presentation_service():
+    _seed_meeting()
+    _seed_tdoc(_WID_ID, "Presentation", "WID new")
+    _write_family(_WID_ID, _WID_URL, (("slides.pptx", "one two three four five six"),))
+    return _service()
+
+
+def _presentation_chunk_id():
+    return next(cid for cid in _chunk_ids(_WID_ID) if cid.count("#") == 3)
+
+
+def test_presentation_vector_returns_exact_embedded_chunk(sqlite_env):
+    service = _presentation_service()
+    recorded = []
+    encode = service._embedder.encode
+    service._embedder.encode = lambda texts: (recorded.extend(texts), encode(texts))[1]
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    matched = service.matched_chunk_texts([chunk_id])[chunk_id]
+    assert matched.chunk_id == chunk_id
+    assert matched.chunk_index == 0
+    assert matched.text == recorded[-1] == "one two three four five six"
+
+
+def test_presentation_vector_does_not_require_fts_sidecar(sqlite_env):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    with get_engine().begin() as conn:
+        conn.execute(text("DROP TABLE tdoc_search"))
+        conn.execute(text("DROP TABLE tdoc_presentation_search"))
+    assert service.matched_chunk_texts([chunk_id])[chunk_id].text == "one two three four five six"
+
+
+def test_presentation_vector_changed_chunk_size_is_stale(sqlite_env):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    _mark_date_checkpoint()
+    chunk_id = _presentation_chunk_id()
+    settings = get_settings().semantic_search
+    settings.chunk_size = 3
+    settings.chunk_overlap = 0
+    assert service.matched_chunk_texts([chunk_id]) == {}
+    assert service.status().is_stale
+    service.index_for_tdoc(_WID_ID)
+    assert service.matched_chunk_texts([chunk_id])[chunk_id].text == "one two three"
+    assert not service.status().is_stale
+
+
+def test_presentation_vector_legacy_entry_is_unverifiable(sqlite_env):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    _mark_date_checkpoint()
+    chunk_id = _presentation_chunk_id()
+    with get_engine().begin() as conn:
+        conn.execute(text("DELETE FROM vec_tdoc_chunk_text WHERE chunk_id = :id"), {"id": chunk_id})
+    assert service.matched_chunk_texts([chunk_id]) == {}
+    assert service.status().is_stale
+
+
+def test_presentation_vector_replace_rolls_back_both_stores(sqlite_env):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    repo = service._vec
+    chunks = service._embed_chunks(_WID_ID, "metadata", repo.content_documents_for_tdoc(_WID_ID))
+    with get_engine().begin() as conn:
+        conn.execute(text("CREATE TRIGGER fail_snapshot BEFORE INSERT ON vec_tdoc_chunk_text "
+                          "BEGIN SELECT RAISE(ABORT, 'snapshot failure'); END"))
+    with pytest.raises(Exception, match="snapshot failure"):
+        repo.upsert_chunks_many([(_WID_ID, chunks)])
+    assert chunk_id in _chunk_ids(_WID_ID)
+    assert repo.matched_chunk_texts([chunk_id])[chunk_id].text == "one two three four five six"
+
+
+def test_presentation_vector_remove_and_stale_rebuild(sqlite_env):
+    service = _presentation_service()
+    service._embedder.model_name = "fake-model"
+    _seed_tdoc(_OTHER_ID, "Other presentation", "WID new")
+    _write_family(_OTHER_ID, _OTHER_URL, (("other.pptx", "untouched"),))
+    list(service.rebuild_embeddings(batch_size=10, stale_only=False, quiet=True))
+    _mark_date_checkpoint()
+    chunk_id = _presentation_chunk_id()
+    other_id = next(cid for cid in _chunk_ids(_OTHER_ID) if cid.count("#") == 3)
+    with get_engine().begin() as conn:
+        conn.execute(text("DELETE FROM vec_tdoc_chunk_text WHERE chunk_id = :id"), {"id": chunk_id})
+    assert service._vec.count_tdocs_to_index(stale_only=True) == 1
+    recorded = []
+    encode = service._embedder.encode
+    service._embedder.encode = lambda texts: (recorded.extend(texts), encode(texts))[1]
+    list(service.rebuild_embeddings(batch_size=10, stale_only=True, quiet=True))
+    assert "untouched" not in recorded
+    assert service.matched_chunk_texts([other_id])[other_id].text == "untouched"
+    assert service.matched_chunk_texts([chunk_id])[chunk_id].text == "one two three four five six"
+    service.remove_for_tdoc(_WID_ID)
+    assert service.matched_chunk_texts([chunk_id]) == {}
+    with get_engine().begin() as conn:
+        assert conn.execute(text(
+            "SELECT count(*) FROM vec_tdoc_chunk_text WHERE tdoc_id = :id"
+        ), {"id": _WID_ID}).scalar() == 0
+
+
+def test_presentation_vector_shared_cap(sqlite_env):
+    settings = get_settings().semantic_search
+    settings.chunk_size = 2
+    settings.chunk_overlap = 0
+    _seed_meeting()
+    _seed_tdoc(_WID_ID, "Presentation", "WID new")
+    _write_family(_WID_ID, _WID_URL, (
+        ("main.pptx", " ".join(str(i) for i in range(20))),
+        ("second.pptx", " ".join(str(i) for i in range(20))),
+    ))
+    service = _service()
+    service.index_for_tdoc(_WID_ID)
+    ids = [cid for cid in _chunk_ids(_WID_ID) if cid.count("#") == 3]
+    assert len(ids) == 16
+    assert len(service.matched_chunk_texts(ids)) == 16
+
+
+def test_presentation_vector_rejects_replaced_content_and_missing_vector(sqlite_env):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    _write_family(_WID_ID, _WID_URL, (("slides.pptx", "replacement text"),))
+    assert service.matched_chunk_texts([chunk_id]) == {}
+    service.index_for_tdoc(_WID_ID)
+    new_id = _presentation_chunk_id()
+    with get_engine().begin() as conn:
+        conn.execute(text("DELETE FROM vec_tdoc_embeddings WHERE chunk_id = :id"), {"id": new_id})
+    assert service.matched_chunk_texts([new_id]) == {}
+
+
+def test_presentation_vector_uses_injected_chunk_settings(sqlite_env):
+    service = _presentation_service()
+    settings = get_settings().model_copy(deep=True)
+    settings.semantic_search.chunk_size = 3
+    settings.semantic_search.chunk_overlap = 0
+    repo = SQLAlchemyVectorIndexRepository(chunk_settings=settings.semantic_search)
+    service = SemanticSearchService(MagicMock(), _Embedder(), repo, settings)
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    assert service.matched_chunk_texts([chunk_id])[chunk_id].text == "one two three"
+    _mark_date_checkpoint()
+    assert not service.status().is_stale
+
+
+def test_presentation_vector_factory_uses_supplied_settings(sqlite_env):
+    from doc3gpp.services.factory import build_semantic_search_service
+
+    _presentation_service()
+    settings = get_settings().model_copy(deep=True)
+    settings.semantic_search.chunk_size = 3
+    settings.semantic_search.chunk_overlap = 0
+    service = build_semantic_search_service(settings, embedder=_Embedder())
+    assert service is not None
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    assert service.matched_chunk_texts([chunk_id])[chunk_id].text == "one two three"
+
+
+def test_presentation_vector_cap_change_marks_short_document_stale(sqlite_env):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    _mark_date_checkpoint()
+    assert not service.status().is_stale
+    get_settings().semantic_search.max_content_chunks_per_tdoc = 15
+    assert service.status().is_stale
+    assert service._vec.count_tdocs_to_index(stale_only=True) == 1
+
+
+def test_presentation_vector_absent_sidecar_is_unverifiable(sqlite_env):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    _mark_date_checkpoint()
+    chunk_id = _presentation_chunk_id()
+    with get_engine().begin() as conn:
+        conn.execute(text("DROP TABLE vec_tdoc_chunk_text"))
+    assert service.matched_chunk_texts([chunk_id]) == {}
+    assert service.status().is_stale
+    create_schema()
+    assert service.matched_chunk_texts([chunk_id]) == {}
+    assert service.status().is_stale
+
+
+def test_presentation_vector_lookup_batches_large_requests(sqlite_env):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    ids = [f"unknown-{i}" for i in range(1200)] + [chunk_id]
+    assert service.matched_chunk_texts(ids)[chunk_id].text == "one two three four five six"
+
+
+@pytest.mark.parametrize("mode", ["lookup", "semantic"])
+def test_presentation_vector_already_open_dbapi_transaction(sqlite_env, mode):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    engine = get_engine()
+    starts = []
+    begin_statements = []
+
+    def begin_dbapi_transaction(conn):
+        # Model modern sqlite3 transaction control independently of Python version.
+        assert not conn.connection.driver_connection.in_transaction
+        starts.append(1)
+        conn.exec_driver_sql("BEGIN")
+
+    def record_begin(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.strip().upper() == "BEGIN":
+            begin_statements.append(1)
+
+    event.listen(engine, "begin", begin_dbapi_transaction)
+    event.listen(engine, "before_cursor_execute", record_begin)
+    try:
+        if mode == "lookup":
+            matched = service.matched_chunk_texts([chunk_id])[chunk_id]
+        else:
+            hit = service.search(
+                "one", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5,
+            )[0].document_hits[0]
+            matched = hit.matched_chunk
+            assert hit.chunk_id == chunk_id
+        assert matched.chunk_id == chunk_id
+        assert matched.text == "one two three four five six"
+        assert len(begin_statements) == len(starts)
+    finally:
+        event.remove(engine, "begin", begin_dbapi_transaction)
+        event.remove(engine, "before_cursor_execute", record_begin)
+
+
+@pytest.mark.parametrize("mode", ["lookup", "semantic"])
+def test_presentation_vector_modern_sqlite_transaction_control(sqlite_env, mode):
+    if not hasattr(sqlite3.Connection, "autocommit"):
+        pytest.skip("sqlite3.Connection.autocommit requires Python 3.12+")
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    engine = get_engine()
+    begin_statements = []
+
+    def modern_transaction(dbapi_connection, _record, _proxy):
+        dbapi_connection.autocommit = False
+        assert dbapi_connection.in_transaction
+
+    def restore_transaction(dbapi_connection, _record):
+        if dbapi_connection is not None:
+            dbapi_connection.autocommit = True
+            dbapi_connection.autocommit = sqlite3.LEGACY_TRANSACTION_CONTROL
+
+    def record_begin(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.strip().upper() == "BEGIN":
+            begin_statements.append(1)
+
+    event.listen(engine, "checkout", modern_transaction)
+    event.listen(engine, "checkin", restore_transaction)
+    event.listen(engine, "before_cursor_execute", record_begin)
+    try:
+        if mode == "lookup":
+            matched = service.matched_chunk_texts([chunk_id])[chunk_id]
+        else:
+            hit = service.search(
+                "one", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5,
+            )[0].document_hits[0]
+            matched = hit.matched_chunk
+            assert hit.chunk_id == chunk_id
+        assert matched.chunk_id == chunk_id
+        assert matched.text == "one two three four five six"
+        assert not begin_statements
+    finally:
+        event.remove(engine, "checkout", modern_transaction)
+        event.remove(engine, "checkin", restore_transaction)
+        event.remove(engine, "before_cursor_execute", record_begin)
+
+
+def test_presentation_vector_hit_keeps_scored_generation(sqlite_env, monkeypatch):
+    service = _presentation_service()
+    settings = get_settings().semantic_search
+    settings.chunk_size = 4
+    settings.chunk_overlap = 0
+    service.index_for_tdoc(_WID_ID)
+    original_knn = service._vec.knn
+    rebuilt = False
+
+    def knn_then_rebuild(*args, **kwargs):
+        nonlocal rebuilt
+        rows = original_knn(*args, **kwargs)
+        if not rebuilt:
+            rebuilt = True
+            settings.chunk_size = 3
+            service.index_for_tdoc(_WID_ID)
+        return rows
+
+    monkeypatch.setattr(service._vec, "knn", knn_then_rebuild)
+    hits = service.search("one", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5)
+    hit = hits[0].document_hits[0]
+    assert hit.matched_chunk.text == "one two three four"
+    assert hit.chunk_id == hit.matched_chunk.chunk_id
+
+
+def _activate_modern_transactions(request):
+    if not hasattr(sqlite3.Connection, "autocommit"):
+        pytest.skip("sqlite3.Connection.autocommit requires Python 3.12+")
+    engine = get_engine()
+
+    def modern_transaction(dbapi_connection, _record, _proxy):
+        dbapi_connection.autocommit = False
+
+    def restore_transaction(dbapi_connection, _record):
+        if dbapi_connection is not None:
+            dbapi_connection.autocommit = True
+            dbapi_connection.autocommit = sqlite3.LEGACY_TRANSACTION_CONTROL
+
+    event.listen(engine, "checkout", modern_transaction)
+    event.listen(engine, "checkin", restore_transaction)
+
+    def cleanup():
+        event.remove(engine, "checkout", modern_transaction)
+        event.remove(engine, "checkin", restore_transaction)
+
+    request.addfinalizer(cleanup)
+
+
+@pytest.mark.parametrize("modern", [False, True], ids=["legacy", "modern"])
+def test_presentation_vector_rebuild_between_knn_and_snapshot(sqlite_env, monkeypatch, request, modern):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    repo = service._vec
+    chunks = service._embed_chunks(_WID_ID, "metadata", repo.content_documents_for_tdoc(_WID_ID))
+    replacement = [
+        replace(chunk, text="replacement generation", embedding=np.roll(chunk.embedding, 1))
+        if chunk.text is not None else chunk
+        for chunk in chunks
+    ]
+    if modern:
+        _activate_modern_transactions(request)
+    original = repo._matched_chunk_texts
+    replaced = False
+
+    def rebuild_before_snapshot(conn, ids):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            repo.upsert_chunks(_WID_ID, replacement)
+        return original(conn, ids)
+
+    monkeypatch.setattr(repo, "_matched_chunk_texts", rebuild_before_snapshot)
+    hit = service.search(
+        "one", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5,
+    )[0].document_hits[0]
+    assert hit.matched_chunk.text == "one two three four five six"
+    assert service.matched_chunk_texts([hit.chunk_id])[hit.chunk_id].text == "replacement generation"
+
+
+@pytest.mark.parametrize("modern", [False, True], ids=["legacy", "modern"])
+def test_presentation_vector_source_check_uses_one_read_snapshot(sqlite_env, monkeypatch, request, modern):
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    chunk_id = _presentation_chunk_id()
+    with get_engine().begin() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+    if modern:
+        _activate_modern_transactions(request)
+    original = service._vec._expected_content_chunk_ids
+    changed = False
+
+    def replace_after_source_plan(conn, tdoc_ids=None):
+        nonlocal changed
+        expected = original(conn, tdoc_ids)
+        if not changed:
+            changed = True
+            _write_family(_WID_ID, _WID_URL, (("slides.pptx", "replacement text"),))
+            with get_engine().begin() as writer:
+                writer.execute(text(
+                    "UPDATE vec_tdoc_chunk_text SET text = 'new generation' WHERE chunk_id = :id"
+                ), {"id": chunk_id})
+        return expected
+
+    monkeypatch.setattr(service._vec, "_expected_content_chunk_ids", replace_after_source_plan)
+    matched = service.matched_chunk_texts([chunk_id])
+    assert matched[chunk_id].text == "one two three four five six"
+
+
+def test_presentation_vector_freezes_settings_before_encode(sqlite_env):
+    service = _presentation_service()
+    settings = get_settings().semantic_search
+    settings.chunk_size = 4
+    settings.chunk_overlap = 0
+    encode = service._embedder.encode
+
+    def encode_and_change_settings(texts):
+        result = encode(texts)
+        settings.chunk_size = 3
+        return result
+
+    service._embedder.encode = encode_and_change_settings
+    service.index_for_tdoc(_WID_ID)
+    _mark_date_checkpoint()
+    chunk_id = _presentation_chunk_id()
+    assert service.status().is_stale
+    settings.chunk_size = 4
+    assert service.matched_chunk_texts([chunk_id])[chunk_id].text == "one two three four"
+
+
+def test_presentation_vector_lookup_and_status_respect_sqlite_999_limit(sqlite_env):
+    if not hasattr(sqlite3.Connection, "setlimit"):
+        pytest.skip("sqlite3.Connection.setlimit requires Python 3.11+")
+    service = _presentation_service()
+    service.index_for_tdoc(_WID_ID)
+    _mark_date_checkpoint()
+    chunk_id = _presentation_chunk_id()
+    ids = [f"other-{i}#document#hash#0" for i in range(260)] + [chunk_id]
+    embedding = np.ones(DIM, dtype=np.float32)
+    service._vec.upsert_chunks_many([
+        (f"other-{i}", [EmbeddedChunk(ids[i], 0, embedding)]) for i in range(260)
+    ])
+
+    def limit_variables(dbapi_connection, _record, _proxy):
+        dbapi_connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+
+    engine = get_engine()
+    event.listen(engine, "checkout", limit_variables)
+    try:
+        assert service.matched_chunk_texts(ids)[chunk_id].text == "one two three four five six"
+        assert not service.status().is_stale
+        assert service._vec.count_tdocs_to_index(stale_only=True) == 0
+        assert list(service._vec.rebuild_batch(batch_size=50, after_id=None, stale_only=True)) == []
+    finally:
+        event.remove(engine, "checkout", limit_variables)

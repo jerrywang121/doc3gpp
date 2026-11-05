@@ -19,6 +19,11 @@ CHUNK_SIZE_DEFAULT = 512
 CHUNK_OVERLAP_DEFAULT = 24
 
 
+def chunking_fingerprint(size: int, overlap: int) -> str:
+    """Identify the whitespace chunking algorithm and its settings."""
+    return f"semantic-whitespace-v1:{size}:{overlap}"
+
+
 def _chunks(text: str, size: int, overlap: int) -> list[str]:
     """Split ``text`` into chunks of ~``size`` whitespace tokens with ``overlap``.
 

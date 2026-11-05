@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from doc3gpp.cli_filters import SearchQueryBuilder
 from doc3gpp.models.search import (
+    MatchedChunk,
     RebuildProgress,
     SearchFilters,
     SearchHit,
@@ -37,6 +38,7 @@ from doc3gpp.models.semantic_search import (
     EmbeddedChunk,
     SemanticDocumentHit,
     SemanticSearchHit,
+    content_chunking_fingerprint,
     parse_content_chunk_id,
 )
 from doc3gpp.services.embedding.chunker import _chunks, plan_content_chunks
@@ -68,7 +70,8 @@ def _group_vec_hits(vec_hits: list[tuple[str, str, int, float]]) -> dict[str, _V
     order, so sibling chunks of one TDoc do not push other TDocs down the ranking.
     """
     grouped: dict[str, _VecTdoc] = {}
-    for tdoc_id, chunk_id, _chunk_idx, dist in vec_hits:
+    for candidate in vec_hits:
+        tdoc_id, chunk_id, _chunk_idx, dist = candidate
         entry = grouped.get(tdoc_id)
         if entry is None:
             entry = grouped[tdoc_id] = _VecTdoc(
@@ -84,6 +87,7 @@ def _group_vec_hits(vec_hits: list[tuple[str, str, int, float]]) -> dict[str, _V
         if previous is None or dist < previous.distance:
             entry.documents[document_id] = SemanticDocumentHit(
                 document_id=document_id, chunk_id=chunk_id, distance=dist,
+                matched_chunk=getattr(candidate, "matched_chunk", None),
             )
     return grouped
 
@@ -321,6 +325,9 @@ class SemanticSearchService:
         else:
             self._vec.remove_for_tdoc(tdoc_id)
 
+    def matched_chunk_texts(self, chunk_ids: Collection[str]) -> dict[str, MatchedChunk]:
+        return self._vec.matched_chunk_texts(chunk_ids)
+
     def _embed_prefetched(
         self,
         tdoc_id: str,
@@ -337,14 +344,18 @@ class SemanticSearchService:
         self, tdoc_id: str, embed_text: str, documents: list[tuple[str, str, str]],
     ) -> list[EmbeddedChunk]:
         semantic = self._settings.semantic_search
-        metadata_texts = _chunks(embed_text, semantic.chunk_size, semantic.chunk_overlap)
+        chunk_size = semantic.chunk_size
+        chunk_overlap = semantic.chunk_overlap
+        content_cap = semantic.max_content_chunks_per_tdoc
+        fingerprint = content_chunking_fingerprint(chunk_size, chunk_overlap, content_cap)
+        metadata_texts = _chunks(embed_text, chunk_size, chunk_overlap)
         max_chunks = getattr(semantic, "max_chunks_per_tdoc", 8)
         metadata_texts = metadata_texts[:max_chunks]
         content = list(plan_content_chunks(
             documents,
-            semantic.chunk_size,
-            semantic.chunk_overlap,
-            semantic.max_content_chunks_per_tdoc,
+            chunk_size,
+            chunk_overlap,
+            content_cap,
         ))
         texts = [
             *metadata_texts,
@@ -367,6 +378,8 @@ class SemanticSearchService:
                     chunk_id=f"{tdoc_id}#{document_id}#{content_hash}#{i}",
                     chunk_index=i,
                     embedding=embeddings[position],
+                    text=chunks[i],
+                    chunking_fingerprint=fingerprint,
                 ))
                 position += 1
         return labelled

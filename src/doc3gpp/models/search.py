@@ -71,6 +71,15 @@ class SearchFilters:
 
 
 @dataclass(slots=True, frozen=True)
+class MatchedChunk:
+    """A matching chunk from the original stored document."""
+
+    chunk_id: str
+    chunk_index: int
+    text: str
+
+
+@dataclass(slots=True, frozen=True)
 class MatchedDocument:
     """One SQL-backed document source that matched an FTS5 query."""
 
@@ -79,6 +88,7 @@ class MatchedDocument:
     source_file: str
     score: float
     previews: dict[str, str]
+    matched_chunk: MatchedChunk | None = None
 
 
 @dataclass(slots=True, frozen=True)

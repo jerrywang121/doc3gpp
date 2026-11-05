@@ -165,11 +165,11 @@ OutputFormat = Literal["table", "json", "markdown"]
 
 
 class OutputFieldsSettings(BaseModel):
-    """Default column lists for each ``* list`` command.
+    """Default columns for CLI list commands and spec-document search.
 
-    Each list mirrors the hardcoded defaults that previously lived inside
-    ``doc3gpp.cli``. Centralising them here lets users customise the
-    default columns via the config file without touching code.
+    The defaults mirror columns previously hardcoded in ``doc3gpp.cli``.
+    Centralising them lets users customise the visible columns via the
+    config file without touching code.
     """
 
     meeting: list[str] = Field(
@@ -223,6 +223,7 @@ class OutputFieldsSettings(BaseModel):
             "spec_id",
             "version",
             "release",
+            "source_file",
             "sections",
             "tables",
             "chunk_index",

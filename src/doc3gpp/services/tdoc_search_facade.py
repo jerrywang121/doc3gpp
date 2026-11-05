@@ -12,6 +12,7 @@ from doc3gpp.models.search import (
     SearchUnavailableError,
 )
 from doc3gpp.models.semantic_search import (
+    SemanticDocumentHit,
     SemanticSearchHit,
     SemanticSearchUnavailableError,
 )
@@ -154,22 +155,49 @@ class TDocSearchFacade:
         mode: SearchMode,
         sources: Mapping[str, tuple[str, str]],
     ) -> tuple[MatchedDocument, ...]:
-        """Chunk hits win; FTS matches are the hybrid fallback when no chunk hit exists."""
-        if hit.document_hits:
-            return tuple(
+        """Merge source matches, preferring verified vector chunks over FTS chunks."""
+        fts_by_id: dict[str, MatchedDocument] = {}
+        if mode is SearchMode.HYBRID and hit.hit is not None:
+            for document in hit.hit.matched_documents:
+                fts_by_id.setdefault(document.document_id, document)
+
+        vector_by_id: dict[str, SemanticDocumentHit] = {}
+        for document in sorted(
+            hit.document_hits,
+            key=lambda item: (item.distance, item.document_id),
+        ):
+            vector_by_id.setdefault(document.document_id, document)
+
+        matched_documents: list[MatchedDocument] = []
+        vector_document_ids: set[str] = set()
+        for document in vector_by_id.values():
+            source = sources.get(document.document_id)
+            if source is None:
+                continue
+            fts_document = fts_by_id.get(document.document_id)
+            matched_chunk = document.matched_chunk
+            if matched_chunk is None and fts_document is not None:
+                matched_chunk = fts_document.matched_chunk
+            matched_documents.append(
                 MatchedDocument(
                     document_id=document.document_id,
-                    ftp_url=sources[document.document_id][0],
-                    source_file=sources[document.document_id][1],
+                    ftp_url=source[0],
+                    source_file=source[1],
                     score=document.distance,
-                    previews={},
+                    previews=(
+                        fts_document.previews if fts_document is not None else {}
+                    ),
+                    matched_chunk=matched_chunk,
                 )
-                for document in hit.document_hits
-                if document.document_id in sources
             )
-        if mode is SearchMode.HYBRID and hit.hit is not None:
-            return hit.hit.matched_documents
-        return ()
+            vector_document_ids.add(document.document_id)
+
+        matched_documents.extend(
+            document
+            for document_id, document in fts_by_id.items()
+            if document_id not in vector_document_ids
+        )
+        return tuple(matched_documents)
 
     @staticmethod
     def _from_semantic(

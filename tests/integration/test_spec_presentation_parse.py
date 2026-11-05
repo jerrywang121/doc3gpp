@@ -252,7 +252,7 @@ def test_mixed_zip_persists_full_presentation_and_indexes_its_text(
     assert presentation.markdown == _EXPECTED_MARKDOWN
     assert presentations == [presentation]
     assert presentation.file_order == 1
-    assert presentation_chunks
+    assert len(presentation_chunks) > 1
     assert all(
         chunk.sections is None and chunk.tables is None
         for chunk in presentation_chunks
@@ -272,6 +272,8 @@ def test_mixed_zip_persists_full_presentation_and_indexes_its_text(
         hit.chunk_id in presentation_chunk_ids and "slideonlysignal" in hit.text
         for hit in slide_hits
     )
+    assert slide_hits[0].source_file == "slides.pptx"
+    assert "slideonlysignal" in slide_hits[0].text
     assert any("notesonlyprobe" in text for text in embedder.texts)
     assert any("slideonlysignal" in text for text in embedder.texts)
     assert vector_repo.upserts
@@ -282,6 +284,84 @@ def test_mixed_zip_persists_full_presentation_and_indexes_its_text(
     assert _SPEC_ID in str(exc_info.value)
     assert _VERSION in str(exc_info.value)
     assert "missing.pptx" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "text,semantic,expected",
+    [
+        ("shared", None, {"Annexes/Radio Slides.PPTX": "shared slide text"}),
+        (
+            None, "meaning",
+            {"Annexes/Radio Slides.PPTX": "shared slide text", "docs/Body.docx": "word body text"},
+        ),
+        (
+            "shared", "meaning",
+            {"Annexes/Radio Slides.PPTX": "shared slide text", "docs/Body.docx": "word body text"},
+        ),
+        (
+            None, None,
+            {"Annexes/Radio Slides.PPTX": "shared slide text", "docs/Body.docx": "word body text"},
+        ),
+    ],
+    ids=["fts", "semantic", "hybrid", "filter"],
+)
+def test_spec_search_source_file_in_every_mode(
+    sqlite_env, tmp_path, monkeypatch, text, semantic, expected
+):
+    from doc3gpp.models.spec_doc import ChunkDraft
+    from doc3gpp.models.unified_search import spec_doc_search_result_to_dict
+    from doc3gpp.services.spec_doc_search_facade import SpecDocSearchFacade
+
+    create_schema("all")
+    repo = SQLAlchemySpecDocRepository()
+    repo.record_download(
+        _SPEC_ID, _VERSION, release="Rel-18", ftp_url=_FTP_URL, docx_count=2
+    )
+    chunks = repo.replace_chunks(
+        _SPEC_ID, _VERSION, release="Rel-18",
+        drafts=[
+            ChunkDraft(
+                file_order=0, source_file="Annexes/Radio Slides.PPTX",
+                text="shared slide text",
+            ),
+            ChunkDraft(file_order=1, source_file="docs/Body.docx", text="word body text"),
+        ],
+    )
+    fts = SpecDocSearchService()
+    fts.upsert_for_version(_SPEC_ID, _VERSION)
+
+    class Vector:
+        def knn(self, _vector, *, limit, filters):
+            return [
+                (chunk.chunk_id, 0.1 + i * 0.1)
+                for i, chunk in enumerate(chunks)
+            ][:limit]
+
+    settings = _settings(tmp_path / "settings-cache")
+    sem = SpecDocSemanticService(
+        fts5_service=fts, embedder=_RecordingEmbedder(), vector_repo=Vector(),
+        settings=settings, doc_repo=repo,
+    )
+    facade = SpecDocSearchFacade(fts, sem, repo, settings)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("search must not fetch, reparse, or rebuild")
+
+    monkeypatch.setattr(SpecDocService, "fetch", forbidden)
+    monkeypatch.setattr("doc3gpp.services.spec_doc_service.fetch_spec_doc_zip", forbidden)
+    monkeypatch.setattr(SpecDocService, "parse", forbidden)
+    monkeypatch.setattr(SpecDocService, "prepare_parse", forbidden)
+    monkeypatch.setattr(fts, "upsert_for_version", forbidden)
+    monkeypatch.setattr(fts, "rebuild", forbidden)
+    monkeypatch.setattr(sem, "index_for_version", forbidden)
+    monkeypatch.setattr(sem, "rebuild_embeddings", forbidden)
+    results = facade.search(text=text, semantic=semantic, filters=SpecDocSearchFilters())
+    assert len(results) == len(expected)
+    assert {row.source_file: row.text for row in results} == expected
+    assert {
+        row["source_file"]: row["text"]
+        for row in map(spec_doc_search_result_to_dict, results)
+    } == expected
 
 
 def test_full_presentation_detail_is_not_reconstructed_from_overlapping_chunks(

@@ -7,6 +7,8 @@
         <th>Version</th>
         <th>Sections</th>
         <th>Tables</th>
+        <th>Source</th>
+        <th>Matching text</th>
         <th>Mode</th><th>Score</th>
       </tr>
     </thead>
@@ -34,12 +36,14 @@
               <span style="white-space: pre-line">{{ hit.tables }}</span>
             {% else %}-{% endif %}
           </td>
+          <td>{{ hit.source_file }}</td>
+          <td><pre class="matched-chunk">{{ hit.text }}</pre></td>
           <td>{{ hit.search_mode.value }}</td>
           <td>{{ '%.4f' | format(hit.score) if hit.score is not none else '-' }}</td>
         </tr>
         {% if hit.previews is not none and hit.previews %}
           <tr class="preview-row">
-            <td colspan="7">
+            <td colspan="9">
               <details class="hit-details">
                 <summary>Matching fields</summary>
                 {% for col, snippet in hit.previews.items() %}

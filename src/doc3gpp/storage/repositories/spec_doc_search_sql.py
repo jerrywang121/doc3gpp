@@ -350,7 +350,7 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
         sql.extend([
             "       c.spec_id, c.version, c.release,",
             "       c.sections, c.tables,",
-            "       c.chunk_index, c.text",
+            "       c.chunk_index, c.text, c.source_file",
             "  FROM spec_doc_search",
             ("  JOIN spec_doc_chunks c"
             "    ON c.chunk_id = spec_doc_search.chunk_id"),
@@ -399,6 +399,7 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
                     tables=row[base + 4],
                     chunk_index=int(row[base + 5]),
                     text=decode_chunk_text(row[0], row[base + 6]),
+                    source_file=row[base + 7],
                     score=row[1],
                     previews=previews,
                 )

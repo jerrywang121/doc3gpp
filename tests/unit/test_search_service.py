@@ -348,7 +348,7 @@ def test_factory_chooses_semantic_reranker_when_both_enabled(monkeypatch):
         f, "SQLAlchemyVectorIndexRepository", lambda *a, **kw: fake_vector_repo,
     )
     monkeypatch.setattr(
-        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+        f, "SQLAlchemySearchIndexRepository", lambda **kwargs: MagicMock(),
     )
 
     svc = f.build_search_service(FakeSettings())
@@ -371,7 +371,7 @@ def test_factory_falls_back_to_passthrough_when_semantic_disabled(monkeypatch):
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
     monkeypatch.setattr(
-        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+        f, "SQLAlchemySearchIndexRepository", lambda **kwargs: MagicMock(),
     )
 
     svc = f.build_search_service(FakeSettings())
@@ -400,7 +400,7 @@ def test_factory_falls_back_to_passthrough_when_embedder_unavailable(monkeypatch
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
     monkeypatch.setattr(
-        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+        f, "SQLAlchemySearchIndexRepository", lambda **kwargs: MagicMock(),
     )
 
     def _raise(settings):
@@ -433,7 +433,7 @@ def test_factory_falls_back_to_passthrough_when_url_unset(monkeypatch) -> None:
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
     monkeypatch.setattr(
-        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+        f, "SQLAlchemySearchIndexRepository", lambda **kwargs: MagicMock(),
     )
     fake_vector_repo = MagicMock()
     monkeypatch.setattr(
@@ -499,7 +499,7 @@ def test_factory_search_service_uses_injected_embedder(monkeypatch) -> None:
         f, "SQLAlchemyVectorIndexRepository", lambda *a, **kw: fake_vector_repo,
     )
     monkeypatch.setattr(
-        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+        f, "SQLAlchemySearchIndexRepository", lambda **kwargs: MagicMock(),
     )
 
     svc = f.build_search_service(FakeSettings(), embedder=fake_embedder)

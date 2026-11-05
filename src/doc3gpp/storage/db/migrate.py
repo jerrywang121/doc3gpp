@@ -308,6 +308,74 @@ def _create_search_schema() -> None:
                 """
             )
         )
+        presentation_columns = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(tdoc_presentation_search)"))
+        }
+        presentation_recreated = not presentation_columns
+        if presentation_columns and not {"row_kind", "extraction_version"} <= presentation_columns:
+            conn.execute(text("DROP TABLE tdoc_presentation_search"))
+            presentation_recreated = True
+        conn.execute(text("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS tdoc_presentation_search USING fts5(
+                tdoc_id UNINDEXED, title, ftp_url, meeting_title, meeting_location,
+                wis, cover_text, change_text, ttcn_text, content_text,
+                row_kind UNINDEXED, document_id UNINDEXED, source_file UNINDEXED,
+                extraction_version UNINDEXED, content_hash UNINDEXED,
+                chunk_id UNINDEXED, chunk_index UNINDEXED, fingerprint UNINDEXED,
+                original_text UNINDEXED
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS tdoc_presentation_search_ledger (
+                tdoc_id TEXT NOT NULL, document_id TEXT NOT NULL,
+                source_file TEXT NOT NULL, content_hash TEXT NOT NULL,
+                fingerprint TEXT NOT NULL, chunk_count INTEGER NOT NULL,
+                PRIMARY KEY (tdoc_id, document_id)
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS tdoc_presentation_search_rowids (
+                fts_rowid INTEGER PRIMARY KEY,
+                tdoc_id TEXT NOT NULL
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_presentation_rowids_tdoc "
+            "ON tdoc_presentation_search_rowids (tdoc_id, fts_rowid)"
+        ))
+        if presentation_recreated:
+            conn.execute(text("DELETE FROM tdoc_presentation_search_rowids"))
+            conn.execute(text("DELETE FROM tdoc_presentation_search_ledger"))
+        # SQLite may persist CREATE TABLE even if the following backfill is
+        # interrupted. Reconcile on every explicit schema initialization rather
+        # than treating table existence as proof that the backfill completed.
+        conn.execute(text("""
+            DELETE FROM tdoc_presentation_search_rowids
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tdoc_presentation_search c
+                WHERE c.rowid = tdoc_presentation_search_rowids.fts_rowid
+                  AND c.tdoc_id = tdoc_presentation_search_rowids.tdoc_id
+            )
+        """))
+        conn.execute(text(
+            "INSERT OR IGNORE INTO tdoc_presentation_search_rowids (fts_rowid, tdoc_id) "
+            "SELECT rowid, tdoc_id FROM tdoc_presentation_search"
+        ))
+        # A map reconciled against a damaged or recreated FTS index can have
+        # fewer rows than an old ledger promises. Invalidate those derived
+        # ledgers so a normal stale rebuild can replace the surviving rows.
+        conn.execute(text("""
+            DELETE FROM tdoc_presentation_search_ledger WHERE tdoc_id IN (
+                SELECT l.tdoc_id FROM (
+                    SELECT tdoc_id, SUM(chunk_count) AS expected
+                    FROM tdoc_presentation_search_ledger GROUP BY tdoc_id
+                ) l LEFT JOIN (
+                    SELECT tdoc_id, COUNT(*) AS actual
+                    FROM tdoc_presentation_search_rowids GROUP BY tdoc_id
+                ) r ON r.tdoc_id = l.tdoc_id
+                WHERE l.expected > COALESCE(r.actual, 0)
+            )
+        """))
         # Composite indexes for filter push-down on the regular tdocs and
         # meetings tables. FTS5 is sqlite-only by convention.
         conn.execute(
@@ -398,6 +466,23 @@ def _create_vector_schema(dim: int | None = None) -> None:
                 """
             )
         )
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS vec_tdoc_chunk_text (
+                chunk_id TEXT PRIMARY KEY,
+                tdoc_id TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                fingerprint TEXT NOT NULL,
+                text TEXT NOT NULL
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_vec_tdoc_chunk_text_tdoc "
+            "ON vec_tdoc_chunk_text (tdoc_id)"
+        ))
+        if layout_dropped:
+            conn.execute(text("DELETE FROM vec_tdoc_chunk_text"))
         if layout_dropped:
             conn.execute(
                 text(

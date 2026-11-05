@@ -273,6 +273,22 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
         services.tdoc_content = build_tdoc_content_service(settings=state.settings)
 
+    @server.tool(
+        name="get_skill",
+        description="Return the complete doc3gpp agent skill as Markdown text.",
+    )
+    def get_skill() -> str:
+        from importlib.resources import files
+
+        return (
+            files("doc3gpp")
+            .joinpath("data")
+            .joinpath("skills")
+            .joinpath("doc3gpp")
+            .joinpath("SKILL.md")
+            .read_text(encoding="utf-8")
+        )
+
     # ---- Meetings -------------------------------------------------
     @server.tool(name="list_meetings", description="List meetings, optionally filtered by TSG, name, location or year. The tsg, name and location filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard

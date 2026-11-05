@@ -26,7 +26,7 @@ from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DatabaseError
 
 from doc3gpp.models.search import (
     MatchedDocument,
@@ -38,11 +38,11 @@ from doc3gpp.models.search import (
 from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.repository.protocols import SearchIndexRepository
 from doc3gpp.settings.loader import get_settings
-from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
+from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES, SemanticSearchSettings
 from doc3gpp.storage.compression import decompress_json
 from doc3gpp.storage.db.fts5_query import normalize_query
 from doc3gpp.storage.db.models import CONTENT_ORM_BY_STORE_KEY, TDocExtractOrm
-from doc3gpp.storage.db.session import get_engine
+from doc3gpp.storage.db.session import ensure_sqlite_read_transaction, get_engine
 from doc3gpp.storage.repositories.rich_filters import (
     build_text_filter_or_params,
     build_text_filter_sql,
@@ -52,6 +52,8 @@ from doc3gpp.storage.repositories.tdoc_document_sources import (
 )
 
 logger = logging.getLogger(__name__)
+
+from doc3gpp.storage.repositories import tdoc_presentation_search_sql as presentation_search
 
 
 # FTS5 snippet column IDs account for the unindexed tdoc_id column at cid 0.
@@ -101,8 +103,8 @@ _QUERY_ERROR_MARKERS = (
 )
 
 
-def _classify_search_error(exc: OperationalError) -> SearchError:
-    """Translate an FTS5 ``OperationalError`` into a domain error.
+def _classify_search_error(exc: DatabaseError) -> SearchError:
+    """Translate an FTS5 database error into a domain error.
 
     Query-shaped failures (bad ``MATCH`` expression) become
     :class:`SearchQueryError`; anything else is treated as index
@@ -217,12 +219,22 @@ def _delete_tdoc_rows(conn: Connection, tdoc_ids: Sequence[str]) -> None:
 class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     """Concrete :class:`SearchIndexRepository` backed by FTS5."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        chunk_settings: SemanticSearchSettings | None = None,
+    ) -> None:
         self._engine = get_engine()
         _check_fts5(self._engine)
         settings = get_settings().search
         self._weights: tuple[float, ...] = tuple(settings.bm25_weights)
         self._snippet_tokens: int = settings.snippet_tokens
+        semantic = (
+            chunk_settings
+            if chunk_settings is not None
+            else get_settings().semantic_search
+        )
+        self._chunk_size = semantic.chunk_size
+        self._chunk_overlap = semantic.chunk_overlap
 
     # ------------------------------------------------------------------
     # Write paths
@@ -251,12 +263,14 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         )
         with self._engine.begin() as conn:
             _delete_tdoc_rows(conn, tdoc_ids)
+            presentation_search.remove_many(conn, tdoc_ids)
             last_uploaded_date: str | None = None
             for tdoc_id in tdoc_ids:
                 index_text = self._build_index_text(conn, tdoc_id)
                 if index_text is None:
                     continue
                 metadata_text, document_rows, uploaded_date = index_text
+                presentation_search.replace(conn, tdoc_id, self._chunk_size, self._chunk_overlap)
                 metadata_values: dict[str, Any] = {
                     column: "" for column in _SNIPPET_COLUMN_NAMES
                 }
@@ -316,6 +330,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
 
     def remove(self, tdoc_id: str) -> None:
         with self._engine.begin() as conn:
+            presentation_search.remove(conn, tdoc_id)
             conn.execute(
                 text("DELETE FROM tdoc_search WHERE tdoc_id = :id"),
                 {"id": tdoc_id},
@@ -416,6 +431,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         parent_scores: dict[str, float] = {}
         try:
             with self._engine.begin() as conn:
+                ensure_sqlite_read_transaction(conn)
                 ranked_rows = conn.execute(
                     rank_sql,
                     {**weight_params, **filter_params},
@@ -491,11 +507,26 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                         ],
                     )
                     rows = conn.execute(text("\n".join(sql)), params).all()
+                    document_ftp_url_index = 5 + len(snippet_columns) + 8
+                    matched_document_candidates = {
+                        (row[0], row[2])
+                        for row in rows
+                        if row[1] == "document"
+                        and row[2] is not None
+                        and row[document_ftp_url_index] is not None
+                    }
+                    chunks = presentation_search.matched_chunks(
+                        conn,
+                        query,
+                        matched_document_candidates,
+                        self._chunk_size,
+                        self._chunk_overlap,
+                    )
                 finally:
                     conn.execute(
                         text("DROP TABLE IF EXISTS temp._doc3gpp_search_selected_tdocs")
                     )
-        except OperationalError as exc:
+        except DatabaseError as exc:
             raise _classify_search_error(exc) from exc
 
         parent_rows: dict[str, dict[str, Any]] = {}
@@ -533,6 +564,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                         document_id=row[2],
                         ftp_url=row[preview_offset + 8],
                         source_file=row[3],
+                        matched_chunk=chunks.get((tdoc_id, row[2])),
                         score=float(row[3 + 1]),
                         previews=previews,
                     )
@@ -575,18 +607,31 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             # The freshness CTE scans the whole corpus, so take one snapshot per
             # rebuild and page through it instead of re-running it per batch.
             with self._engine.begin() as conn:
-                stale_ids = conn.execute(
+                presentation_ctes, presentation_params = presentation_search.freshness_ctes(
+                    conn, self._chunk_size, self._chunk_overlap,
+                )
+                stale_rows = conn.execute(
                     text(
-                        f"{_TDOC_FRESHNESS_CTES_SQL}"
+                        f"{_TDOC_FRESHNESS_CTES_SQL}{presentation_ctes}"
                         " SELECT t.tdoc_id FROM tdocs t"
-                        " JOIN stale_tdocs stale ON stale.tdoc_id = t.tdoc_id"
+                        " JOIN (SELECT tdoc_id FROM stale_tdocs UNION "
+                        "SELECT tdoc_id FROM presentation_stale) stale ON stale.tdoc_id = t.tdoc_id"
                         " WHERE t.tdoc_id > :last_id"
                         " ORDER BY t.tdoc_id ASC"
                     ),
-                    {"last_id": last_id},
-                ).scalars().all()
-            for start in range(0, len(stale_ids), batch_size):
-                yield list(stale_ids[start : start + batch_size])
+                    {"last_id": last_id, **presentation_params},
+                ).yield_per(batch_size)
+                try:
+                    batch: list[str] = []
+                    for row in stale_rows:
+                        batch.append(row[0])
+                        if len(batch) == batch_size:
+                            yield batch
+                            batch = []
+                    if batch:
+                        yield batch
+                finally:
+                    stale_rows.close()
             return
 
         while True:
@@ -622,6 +667,17 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         else:
             sql = "SELECT COUNT(*) FROM tdocs t" + after_clause
         with self._engine.begin() as conn:
+            if stale_only:
+                presentation_ctes, presentation_params = presentation_search.freshness_ctes(
+                    conn, self._chunk_size, self._chunk_overlap,
+                )
+                sql = (
+                    f"{_TDOC_FRESHNESS_CTES_SQL}{presentation_ctes} "
+                    "SELECT COUNT(*) FROM tdocs t JOIN "
+                    "(SELECT tdoc_id FROM stale_tdocs UNION SELECT tdoc_id FROM presentation_stale) "
+                    "stale ON stale.tdoc_id = t.tdoc_id" + after_clause
+                )
+                return int(conn.execute(text(sql), {**params, **presentation_params}).scalar() or 0)
             return int(conn.execute(text(sql), params).scalar() or 0)
 
     def get_resume_cursor(self) -> str | None:
@@ -677,6 +733,14 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             ).one()
             row_count = int(freshness[0] or 0)
             is_stale = bool(freshness[1])
+            presentation_ctes, presentation_params = presentation_search.freshness_ctes(
+                conn, self._chunk_size, self._chunk_overlap,
+            )
+            presentation_stale = conn.execute(text(
+                f"WITH presentation_anchor AS (SELECT 1){presentation_ctes} "
+                "SELECT EXISTS (SELECT 1 FROM presentation_stale)"
+            ), presentation_params).scalar_one()
+            is_stale = is_stale or bool(presentation_stale)
             last_rebuild = conn.execute(
                 text(
                     "SELECT value FROM tdoc_search_meta "

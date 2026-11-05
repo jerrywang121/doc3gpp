@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from doc3gpp.models.jobs import Job, JobKind, JobStatus, JSONValue
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.search import (
+    MatchedChunk,
     RebuildProgress,  # noqa: F401
     SearchFilters,
     SearchHit,
@@ -1017,6 +1018,14 @@ class VectorIndexRepository(Protocol):
     ``None`` so callers can degrade gracefully.
     """
 
+    def matched_chunk_texts(self, chunk_ids: Collection[str]) -> dict[str, MatchedChunk]:
+        """Return currently verified chunks, not necessarily those scored by an earlier KNN.
+
+        Semantic result decoration must instead use ``SemanticDocumentHit.matched_chunk``,
+        captured with the scored vector in one read snapshot.
+        """
+        ...
+
     def upsert_chunks(self, tdoc_id: str, chunks: Sequence[EmbeddedChunk]) -> None:
         """Replace all chunk rows for ``tdoc_id`` with the labelled chunks.
 
@@ -1081,6 +1090,9 @@ class VectorIndexRepository(Protocol):
         filters: SearchFilters | None = None,
     ) -> list[tuple[str, str, int, float]]:
         """KNN by cosine distance; returns ``(tdoc_id, chunk_id, chunk_index, distance)``.
+
+        SQL candidates also carry a ``matched_chunk`` attribute captured and verified
+        in the same SQLite read snapshot as their vector. It may be ``None``.
 
         Metadata filters (``tdoc_id``, ``tsg``, ``meeting_id``, ``since``/``until``)
         run inside the vec0 scan before ``limit``, so the window is exact. A

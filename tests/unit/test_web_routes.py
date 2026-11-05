@@ -406,6 +406,7 @@ class FakeSpecDocSearchFacade:
                 spec_id="38.331",
                 version="18.5.0",
                 release="Rel-18",
+                source_file="docs/Body.docx",
                 sections="1 Handover",
                 tables=None,
                 chunk_index=0,
@@ -2109,10 +2110,12 @@ def test_unified_spec_doc_search_modes_return_flattened_rows(
     assert filter_response.status_code == 200
     assert filter_response.json()[0]["search_mode"] == "filter"
     assert filter_response.json()[0]["score"] is None
-    assert set(filter_response.json()[0]) == {
+    assert list(filter_response.json()[0]) == [
         "chunk_id", "score", "search_mode", "previews", "spec_id", "version",
-        "release", "sections", "tables", "chunk_index", "text",
-    }
+        "release", "source_file", "sections", "tables", "chunk_index", "text",
+    ]
+    for response in (text_response, semantic_response, filter_response):
+        assert response.json()[0]["source_file"] == "docs/Body.docx"
 
 
 def test_unified_tdoc_search_json_maps_corruption_with_rebuild_hint(
@@ -3922,10 +3925,11 @@ def test_spec_doc_search_accepts_sections_and_tables(client: TestClient) -> None
 
     assert response.status_code == 200
     payload = response.json()
-    assert set(payload[0]) == {
+    assert list(payload[0]) == [
         "chunk_id", "score", "search_mode", "previews", "spec_id", "version",
-        "release", "sections", "tables", "chunk_index", "text",
-    }
+        "release", "source_file", "sections", "tables", "chunk_index", "text",
+    ]
+    assert payload[0]["source_file"] == "docs/Body.docx"
     assert payload[0]["sections"] == "1 Handover"
     assert payload[0]["tables"] is None
     assert facade.calls[0]["filters"].sections == "%5.1%"

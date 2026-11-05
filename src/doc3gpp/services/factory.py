@@ -761,6 +761,7 @@ def build_semantic_search_service(
                 vector_repo = SQLAlchemyVectorIndexRepository(
                     expected_model=getattr(embedder, "model_name", None),
                     expected_dim=live_dim,
+                    chunk_settings=settings.semantic_search,
                 )
             except VectorIndexUnavailableError:
                 # Construction failures (missing schema, no sqlite-vec)
@@ -823,7 +824,9 @@ def build_search_service(
         return None
     try:
         if repo is None:
-            repo = SQLAlchemySearchIndexRepository()
+            repo = SQLAlchemySearchIndexRepository(
+                chunk_settings=settings.semantic_search,
+            )
         if reranker is None:
             from doc3gpp.models.semantic_search import (
                 EmbedderUnavailableError,

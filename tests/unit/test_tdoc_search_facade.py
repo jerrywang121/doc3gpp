@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
 
 import pytest
 
 from doc3gpp.models.search import (
+    MatchedChunk,
     MatchedDocument,
     SearchFilters,
     SearchHit,
@@ -17,6 +20,7 @@ from doc3gpp.models.semantic_search import (
     SemanticSearchUnavailableError,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.tdoc_identity import document_id_for
 from doc3gpp.models.unified_search import SearchMode, TDocSearchResult
 from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
 from doc3gpp.storage.db.migrate import create_schema
@@ -314,6 +318,248 @@ def test_chunk_hit_provenance_resolves_through_source_repository(sqlite_env) -> 
             previews={},
         ),
     )
+
+def test_hybrid_unions_distinct_fts_and_vector_presentations() -> None:
+    fts_url = "ran/fts.zip"
+    fts_source = "Annexes/Radio.PPTX"
+    fts_document_id = document_id_for(fts_url, fts_source)
+    fts_document = MatchedDocument(
+        document_id=fts_document_id,
+        ftp_url=fts_url,
+        source_file=fts_source,
+        score=-2.0,
+        previews={"content_text": "<<radio>>"},
+        matched_chunk=MatchedChunk(
+            chunk_id=f"R5-000001#{fts_document_id}#fts-hash#0",
+            chunk_index=0,
+            text="Radio presentation content",
+        ),
+    )
+
+    vector_url = "ran/vector.zip"
+    vector_source = "legacy/Deck.ppt"
+    vector_document_id = document_id_for(vector_url, vector_source)
+    vector_chunk = MatchedChunk(
+        chunk_id=f"R5-000001#{vector_document_id}#vector-hash#0",
+        chunk_index=0,
+        text="Legacy deck content",
+    )
+    semantic_hit = SemanticSearchHit(
+        tdoc_id="R5-000001",
+        rrf_score=0.4,
+        hit=replace(_search_hit(), matched_documents=(fts_document,)),
+        min_chunk_distance=0.1,
+        best_chunk_id="R5-000001#0",
+        document_hits=(
+            SemanticDocumentHit(
+                document_id=vector_document_id,
+                chunk_id=vector_chunk.chunk_id,
+                distance=0.1,
+                matched_chunk=vector_chunk,
+            ),
+        ),
+    )
+    source = RecordingSource(
+        [], documents={vector_document_id: (vector_url, vector_source)},
+    )
+    facade = _facade(
+        fts=RecordingFts(),
+        semantic=RecordingSemantic([semantic_hit]),
+        source=source,
+    )
+
+    results = facade.search(
+        text="radio",
+        semantic="deck",
+        filters=SearchFilters(limit=5),
+    )
+
+    matched = results[0].matched_documents
+    assert [document.document_id for document in matched] == [
+        vector_document_id,
+        fts_document_id,
+    ]
+    assert [document.source_file for document in matched] == [
+        vector_source,
+        fts_source,
+    ]
+    assert len({document.document_id for document in matched}) == 2
+    assert matched[1].previews == fts_document.previews
+
+
+@pytest.mark.parametrize(
+    ("vector_text", "expected_text"),
+    [
+        ("verified vector snapshot", "verified vector snapshot"),
+        (None, "verified FTS snapshot"),
+    ],
+)
+def test_hybrid_same_document_preserves_preview_and_best_chunk(
+    vector_text: str | None,
+    expected_text: str,
+) -> None:
+    ftp_url = "ran/shared.zip"
+    source_file = "Annexes/Radio.PPTX"
+    document_id = document_id_for(ftp_url, source_file)
+    fts_chunk = MatchedChunk(
+        chunk_id=f"R5-000001#{document_id}#fts-hash#0",
+        chunk_index=0,
+        text="verified FTS snapshot",
+    )
+    fts_previews = {"content_text": "<<radio>> procedure"}
+    fts_document = MatchedDocument(
+        document_id=document_id,
+        ftp_url=ftp_url,
+        source_file=source_file,
+        score=-2.0,
+        previews=fts_previews,
+        matched_chunk=fts_chunk,
+    )
+    vector_chunk_id = f"R5-000001#{document_id}#vector-hash#1"
+    vector_chunk = (
+        MatchedChunk(
+            chunk_id=vector_chunk_id,
+            chunk_index=1,
+            text=vector_text,
+        )
+        if vector_text is not None
+        else None
+    )
+    semantic_hit = SemanticSearchHit(
+        tdoc_id="R5-000001",
+        rrf_score=0.4,
+        hit=replace(_search_hit(), matched_documents=(fts_document,)),
+        min_chunk_distance=0.05,
+        best_chunk_id="R5-000001#1",
+        document_hits=(
+            SemanticDocumentHit(
+                document_id=document_id,
+                chunk_id=vector_chunk_id,
+                distance=0.05,
+                matched_chunk=vector_chunk,
+            ),
+        ),
+    )
+    source = RecordingSource(
+        [], documents={document_id: (ftp_url, source_file)},
+    )
+    facade = _facade(
+        fts=RecordingFts(),
+        semantic=RecordingSemantic([semantic_hit]),
+        source=source,
+    )
+
+    result = facade.search(
+        text="radio",
+        semantic="deck",
+        filters=SearchFilters(limit=5),
+    )[0]
+
+    assert len(result.matched_documents) == 1
+    matched = result.matched_documents[0]
+    assert matched.matched_chunk is not None
+    assert matched.matched_chunk.text == expected_text
+    assert matched.previews == fts_previews
+
+
+def test_hybrid_same_member_in_different_zip_urls() -> None:
+    source_file = "Annexes/Radio.PPTX"
+    fts_url = "ran/older.zip"
+    vector_url = "ran/newer.zip"
+    fts_document_id = document_id_for(fts_url, source_file)
+    vector_document_id = document_id_for(vector_url, source_file)
+    assert fts_document_id != vector_document_id
+
+    fts_document = MatchedDocument(
+        document_id=fts_document_id,
+        ftp_url=fts_url,
+        source_file=source_file,
+        score=-1.0,
+        previews={"content_text": "<<radio>> older version"},
+    )
+    vector_chunk = MatchedChunk(
+        chunk_id=f"R5-000001#{vector_document_id}#vector-hash#0",
+        chunk_index=0,
+        text="radio newer version",
+    )
+    semantic_hit = SemanticSearchHit(
+        tdoc_id="R5-000001",
+        rrf_score=0.4,
+        hit=replace(_search_hit(), matched_documents=(fts_document,)),
+        min_chunk_distance=0.1,
+        best_chunk_id="R5-000001#0",
+        document_hits=(
+            SemanticDocumentHit(
+                document_id=vector_document_id,
+                chunk_id=vector_chunk.chunk_id,
+                distance=0.1,
+                matched_chunk=vector_chunk,
+            ),
+        ),
+    )
+    source = RecordingSource(
+        [], documents={vector_document_id: (vector_url, source_file)},
+    )
+    facade = _facade(
+        fts=RecordingFts(),
+        semantic=RecordingSemantic([semantic_hit]),
+        source=source,
+    )
+
+    result = facade.search(
+        text="radio",
+        semantic="radio",
+        filters=SearchFilters(limit=5),
+    )[0]
+
+    assert [document.document_id for document in result.matched_documents] == [
+        vector_document_id,
+        fts_document_id,
+    ]
+    assert [document.ftp_url for document in result.matched_documents] == [
+        vector_url,
+        fts_url,
+    ]
+
+
+def test_semantic_unverified_chunk_serializes_null() -> None:
+    from doc3gpp.models.unified_search import tdoc_search_result_to_dict
+
+    ftp_url = "ran/unverified.zip"
+    source_file = "slides/Radio.pptx"
+    document_id = document_id_for(ftp_url, source_file)
+    semantic_hit = SemanticSearchHit(
+        tdoc_id="R5-000001",
+        rrf_score=0.4,
+        hit=_search_hit(),
+        min_chunk_distance=0.1,
+        best_chunk_id="R5-000001#0",
+        document_hits=(
+            SemanticDocumentHit(
+                document_id=document_id,
+                chunk_id=f"R5-000001#{document_id}#stale-hash#0",
+                distance=0.1,
+                matched_chunk=None,
+            ),
+        ),
+    )
+    source = RecordingSource(
+        [], documents={document_id: (ftp_url, source_file)},
+    )
+    facade = _facade(
+        fts=None,
+        semantic=RecordingSemantic([semantic_hit]),
+        source=source,
+    )
+
+    result = facade.search(
+        text=None,
+        semantic="radio",
+        filters=SearchFilters(limit=5),
+    )[0]
+    payload = json.loads(json.dumps(tdoc_search_result_to_dict(result)))
+
+    assert payload["matched_documents"][0]["matched_chunk"] is None
 
 
 def test_filter_search_only_reads_source_repository() -> None:

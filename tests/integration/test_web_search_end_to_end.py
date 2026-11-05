@@ -234,3 +234,86 @@ def test_search_html_links_matched_source_with_encoded_identity(search_app) -> N
         "ftp_url": [ftp_url],
         "source_file": [source_file],
     }
+
+
+
+def test_search_presentation_html_escapes_path_and_chunk(search_app) -> None:
+    from doc3gpp.models.search import MatchedChunk
+    from doc3gpp.models.unified_search import SpecDocSearchResult
+    from doc3gpp.web.deps import get_spec_doc_search_facade
+
+    source_file = "Annexes/<script>.PPTX"
+    chunk_text = "<script>alert(1)</script>"
+    ftp_url = "https://www.3gpp.org/ftp/R5-260001.zip"
+    tdoc_result = TDocSearchResult(
+        tdoc_id="R5-260001",
+        score=0.42,
+        search_mode=SearchMode.SEMANTIC,
+        previews=None,
+        title="Radio presentation",
+        meeting="RAN5#108",
+        tsg="R5",
+        uploaded_date="2026-01-02",
+        ftp_url=ftp_url,
+        wis=None,
+        type="CR",
+        status=None,
+        best_chunk_id="R5-260001#0",
+        matched_documents=(
+            MatchedDocument(
+                document_id="doc-presentation",
+                ftp_url=ftp_url,
+                source_file=source_file,
+                score=-0.5,
+                previews={},
+                matched_chunk=MatchedChunk(
+                    chunk_id="R5-260001#doc-presentation#0",
+                    chunk_index=0,
+                    text=chunk_text,
+                ),
+            ),
+        ),
+    )
+    spec_doc_result = SpecDocSearchResult(
+        chunk_id="38.331@18.5.0#0",
+        score=0.42,
+        search_mode=SearchMode.SEMANTIC,
+        previews=None,
+        spec_id="38.331",
+        version="18.5.0",
+        release="Rel-18",
+        sections=None,
+        tables=None,
+        chunk_index=0,
+        text=chunk_text,
+        source_file=source_file,
+    )
+
+    class TDocFacade:
+        def search(self, **_kwargs):
+            return [tdoc_result]
+
+    class SpecDocFacade:
+        def search(self, **_kwargs):
+            return [spec_doc_result]
+
+    search_app.dependency_overrides[get_tdoc_search_facade] = lambda: TDocFacade()
+    search_app.dependency_overrides[get_spec_doc_search_facade] = (
+        lambda: SpecDocFacade()
+    )
+    with TestClient(search_app) as client:
+        responses = (
+            client.get("/tdocs/search", params={"semantic": "presentation"}),
+            client.get("/spec-docs/search", params={"semantic": "presentation"}),
+        )
+
+    assert all(response.status_code == 200 for response in responses)
+    for response in responses:
+        assert "Annexes/&lt;script&gt;.PPTX" in response.text
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
+        assert "<script>alert(1)</script>" not in response.text
+        soup = BeautifulSoup(response.text, "html.parser")
+        assert not any(
+            script.string and "alert(1)" in script.string
+            for script in soup.find_all("script")
+        )

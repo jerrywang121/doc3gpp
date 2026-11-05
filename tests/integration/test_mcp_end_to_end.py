@@ -63,6 +63,7 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
     tools = asyncio.run(run())
     names = {t.name for t in tools}
     expected = {
+        "get_skill",
         "list_meetings",
         "get_meeting",
         "list_tdocs",
@@ -125,6 +126,29 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
     assert "rebuild_search_index" not in names
     assert "parse_spec_docs" in names
     assert not any(name.startswith("fetch_spec") for name in names)
+
+
+def test_get_skill_returns_complete_packaged_markdown(sqlite_env) -> None:
+    import asyncio
+    from pathlib import Path
+
+    _, server = _state_and_server()
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src/doc3gpp/data/skills/doc3gpp/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    async def run():
+        tools = await server.list_tools()
+        tool = next(tool for tool in tools if tool.name == "get_skill")
+        result = await server.call_tool("get_skill", {})
+        return tool, result
+
+    tool, result = asyncio.run(run())
+    assert tool.input_schema["properties"] == {}
+    assert result.is_error is False
+    assert len(result.content) == 1
+    assert result.content[0].text == source
 
 
 def test_parse_spec_docs_uses_scalar_spec_id(sqlite_env) -> None:
@@ -1374,6 +1398,217 @@ def test_unified_search_mcp_matches_http_for_all_modes(sqlite_env) -> None:
             assert mcp_bytes == http_response.content.decode("utf-8"), name
             if name == "search_tdoc":
                 assert json.loads(mcp_bytes)[0]["matched_documents"] == []
+
+    get_engine.cache_clear()
+    del state.engine
+
+
+
+def test_search_presentation_cli_rest_mcp_parity(sqlite_env, monkeypatch) -> None:
+    import asyncio
+    import json
+
+    from fastapi.testclient import TestClient
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app as cli_app
+    from doc3gpp.models.search import MatchedChunk, MatchedDocument
+    from doc3gpp.models.unified_search import (
+        SearchMode,
+        SpecDocSearchResult,
+        TDocSearchResult,
+    )
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    source_file = "Annexes/Radio Slides.PPTX"
+    ftp_url = "https://www.3gpp.org/ftp/R5-260001.zip"
+    tdoc_results = [
+        TDocSearchResult(
+            tdoc_id="R5-260001",
+            score=0.42,
+            search_mode=SearchMode.SEMANTIC,
+            previews=None,
+            title="Radio presentation",
+            meeting="RAN5#108",
+            tsg="R5",
+            uploaded_date="2026-01-02",
+            ftp_url=ftp_url,
+            wis=None,
+            type="CR",
+            status="Approved",
+            best_chunk_id="R5-260001#0",
+            matched_documents=(
+                MatchedDocument(
+                    document_id="doc-presentation",
+                    ftp_url=ftp_url,
+                    source_file=source_file,
+                    score=-0.5,
+                    previews={},
+                    matched_chunk=MatchedChunk(
+                        chunk_id="R5-260001#doc-presentation#0",
+                        chunk_index=0,
+                        text="complete slide chunk text",
+                    ),
+                ),
+                MatchedDocument(
+                    document_id="doc-legacy",
+                    ftp_url=ftp_url,
+                    source_file="docs/Legacy.ppt",
+                    score=-0.25,
+                    previews={},
+                    matched_chunk=None,
+                ),
+            ),
+        ),
+        TDocSearchResult(
+            tdoc_id="R5-260002",
+            score=0.2,
+            search_mode=SearchMode.SEMANTIC,
+            previews=None,
+            title="Second result",
+            meeting=None,
+            tsg=None,
+            uploaded_date=None,
+            ftp_url=None,
+            wis=None,
+            type=None,
+            status=None,
+            best_chunk_id=None,
+            matched_documents=(),
+        ),
+    ]
+    spec_doc_results = [
+        SpecDocSearchResult(
+            chunk_id="38.331@18.5.0#2",
+            score=0.42,
+            search_mode=SearchMode.SEMANTIC,
+            previews=None,
+            spec_id="38.331",
+            version="18.5.0",
+            release=None,
+            sections=None,
+            tables=None,
+            chunk_index=2,
+            text="complete slide chunk text",
+            source_file=source_file,
+        ),
+        SpecDocSearchResult(
+            chunk_id="38.331@18.5.0#3",
+            score=0.2,
+            search_mode=SearchMode.SEMANTIC,
+            previews=None,
+            spec_id="38.331",
+            version="18.5.0",
+            release="Rel-18",
+            sections="5.1 Handover",
+            tables=None,
+            chunk_index=3,
+            text="second matching chunk",
+            source_file="docs/Body.docx",
+        ),
+    ]
+
+    class StaticFacade:
+        def __init__(self, results):
+            self.results = results
+
+        def search(self, **_kwargs):
+            return self.results
+
+    tdoc_facade = StaticFacade(tdoc_results)
+    spec_doc_facade = StaticFacade(spec_doc_results)
+    state, server = _state_and_server()
+    state.services.tdoc_search = tdoc_facade
+    state.services.spec_doc_search_facade = spec_doc_facade
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: state.settings)
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda *_args, **_kwargs: tdoc_facade,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_spec_doc_search_facade",
+        lambda *_args, **_kwargs: spec_doc_facade,
+    )
+    runner = CliRunner()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+        app.state.web.services.tdoc_search = tdoc_facade
+        app.state.web.services.spec_doc_search_facade = spec_doc_facade
+
+        async def call_tool(name: str, args: dict) -> str:
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        for command, tool_name, route, payload_key in (
+            (
+                ["tdoc", "search", "--semantic", "presentation"],
+                "search_tdoc",
+                "/tdocs/search",
+                "tdoc_id",
+            ),
+            (
+                ["spec", "doc", "search", "--semantic", "presentation"],
+                "search_spec_docs",
+                "/spec-docs/search",
+                "chunk_id",
+            ),
+        ):
+            cli_result = runner.invoke(
+                cli_app, [*command, "--format", "json", "--compact"]
+            )
+            assert cli_result.exit_code == 0, cli_result.output
+            rest_response = client.get(
+                route,
+                params={"semantic": "presentation", "format": "json"},
+            )
+            assert rest_response.status_code == 200, rest_response.text
+            rest_bytes = rest_response.content.decode("utf-8")
+            mcp_bytes = asyncio.run(
+                call_tool(tool_name, {"semantic": "presentation"})
+            )
+            assert mcp_bytes == rest_bytes
+            cli_rows = json.loads(cli_result.stdout)
+            rest_rows = json.loads(rest_bytes)
+            mcp_rows = json.loads(mcp_bytes)
+            assert cli_rows == rest_rows == mcp_rows
+            assert [row[payload_key] for row in cli_rows] == [
+                row[payload_key] for row in rest_rows
+            ]
+
+            if payload_key == "tdoc_id":
+                assert [row["tdoc_id"] for row in rest_rows] == [
+                    "R5-260001", "R5-260002"
+                ]
+                assert rest_rows[0]["matched_documents"][0]["source_file"] == source_file
+                assert rest_rows[0]["matched_documents"][0]["matched_chunk"] == {
+                    "chunk_id": "R5-260001#doc-presentation#0",
+                    "chunk_index": 0,
+                    "text": "complete slide chunk text",
+                }
+                assert rest_rows[0]["matched_documents"][1]["matched_chunk"] is None
+                assert rest_rows[1]["matched_documents"] == []
+            else:
+                assert [row["chunk_id"] for row in rest_rows] == [
+                    "38.331@18.5.0#2", "38.331@18.5.0#3"
+                ]
+                assert [row["source_file"] for row in rest_rows] == [
+                    source_file, "docs/Body.docx"
+                ]
+                assert [row["text"] for row in rest_rows] == [
+                    "complete slide chunk text", "second matching chunk"
+                ]
+                assert rest_rows[0]["release"] is None
+                assert rest_rows[0]["sections"] is None
+                assert rest_rows[0]["tables"] is None
 
     get_engine.cache_clear()
     del state.engine

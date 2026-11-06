@@ -23,10 +23,11 @@ On the machine running the doc3gpp server, install `doc3gpp[extract]` for Word a
 
 The [3GPP structure](https://www.3gpp.org/3gpp-groups) is TSG -> working group (WG) -> specifications.
 Technical Specification Groups (TSGs) include RAN, SA, and CT.
-Working groups (WGs) are the primary operational units within TSGs. e.g. R1, R2, R3 within RAN. They handle the detailed technical work and produce specifications, reports, and TDocs for their respective areas.
+Working groups (WGs) are the primary operational units within TSGs. They handle the detailed technical work and produce specifications, reports, and TDocs for their respective areas. This tool use combined identifiers for TSGs+WGs for document searches, such as `R5` for RAN WG5, `C1` for CT WG1, etc.
+
 Use `list_tsgs({})` to discover groups.
 Use `get_tsg({"short_name":"R5"})` for RAN5 details and recent meetings.
-The tool's TSG identifiers also represent WGs, such as `R5` and `CT1`.
+The tool's TSG identifiers also represent WGs, such as `R5` and `C1`.
 Use `list_specs({"tsg":"R5"})` to find specifications under that WG.
 
 Technical work and associated TDocs relate to one or more Work Items (WIs) or Study Items (SIs).
@@ -52,10 +53,12 @@ TSG Plenary packages have the form `RP-`, `SP-`, or `CP-` depending on the TSG, 
 A Change Request (CR) TDoc proposes changes to one specification at a specific release and version. e.g. v18.10.0 for Rel-18, main version 10, minor version 0.
 WG-agreed CRs form packages for approval at the quarterly TSG plenary.
 Packages group CRs by specification, release/version, and WI.
-Search the plenary meeting as well as the originating WG meeting when tracing approval.
-Distinguish WG agreement, plenary approval, and incorporation into a published specification.
+
 Specification main versions advance after the meeting cycle incorporates approved plenary packages. e.g. v18.1.0 -> v18.2.0. The minor version increments for minor correction after the meeting, e.g. agreed CRs missed during implementation, or editorial changes.
-Check stored versions and CR links rather than assuming every meeting changes every specification.
+A new release of a spec are created after incorporated a CR associated with a WI of later release.
+A spec maintains multiple releases in parallel, with each release advancing its own set of main and minor versions.
+Exception is RAN5 test specs, where each of their testcase has it own release applicability. The spec release advances when testcases of new release feature are incorporated. Old releases of the same spec become obsolete.
+Check stored spec versions and their associated CRs rather than assuming every meeting changes every specification.
 
 ### Special RAN5 TTCN meetings
 
@@ -120,11 +123,11 @@ An individual annex conversion failure instead appears in `skipped_sources` in `
 ### TDoc revisions, reviews, and supporting ZIPs
 
 `parse_tdocs` (or `doc3gpp tdoc parse --tdoc <id>`) parses only the main ZIP in `tdocs.ftp_url`.
-It does not automatically parse separate MCC review or supporting ZIPs.
-Examples include MCC160 review comments and supporting prose draft CRs.
+It does not automatically parse separate TDoc revisions, MCC review or supporting ZIPs.
+Examples include MCC160 review comments and supporting prose draft CRs, and TDoc revisions.
 
 Associated documents can be outside the main TDoc ZIP and absent from the meeting's TDoc list.
-Meeting revisions often reside in the meeting FTP location's `inbox` subfolder.
+TDoc revisions during a meeting often reside in the meeting FTP location's `inbox` subfolder, with suffix `r1`, `r2`, etc.
 TTCN MCC reviews and supporting prose draft CRs can reside in its `review` subfolder.
 Registered associated files appear in `get_tdoc` details or the CLI `tdoc show` Files section.
 Use returned URLs rather than constructing filenames from these folder conventions.
@@ -190,9 +193,9 @@ The inventory is collected during an actual spec-document parse, not spec sync, 
 Spec-document parsing converts `.docx`, `.doc`, `.pptx`, and `.ppt` ZIP members into searchable chunks.
 Word files contribute TOC entries; presentations do not contribute TOC entries or section/table metadata.
 Presentation extraction is text only: it does not interpret images, charts, or OCR.
-Other ZIP members, including PDFs, spreadsheets, images, and nested ZIPs, can appear in the inventory but are not converted or searched.
+Other ZIP members, including PDFs, spreadsheets, images, and nested ZIPs, can appear in the inventory but are not supported for parsing or searching.
 The MCP tools do not return those original attachments; use the version's ZIP URL if the original files are needed.
-Use the legacy Office dependencies above for `.doc` and `.ppt`.
+Use the legacy Office dependencies above for parsing `.doc` and `.ppt`.
 
 For a complete presentation annex, copy its exact path from the selected version's `zip_files` and call:
 
@@ -233,51 +236,25 @@ The `search_tdoc` and `search_spec_docs` tools select these search modes:
 
 ### Search result provenance and coverage
 
-`search_spec_docs` returns each matching chunk's exact, case-preserving ZIP
-member `source_file` and full `text` in every mode. The CLI includes
-`source_file` by default; `--fields` and `[output.fields].spec_doc` can
-customize its visible columns.
+`search_spec_docs` returns each matching chunk's full `text` and exact,
+case-preserving ZIP member `source_file` in every mode.
 
-Every `search_tdoc` row has `matched_documents`, which may be empty for
-metadata-only and filter-only results. Each source entry identifies its exact
-ZIP URL (`ftp_url`) and member path (`source_file`), and includes `document_id`,
-score, FTS previews, and `matched_chunk`: `{chunk_id, chunk_index, text}` or
-`null`. Use the entry's URL and path for a source-specific read; the top-level
-TDoc `ftp_url` remains the parent URL.
+Each `search_tdoc` row contains `matched_documents`.
+This list can be empty for metadata-only or filter-only results.
+Each entry includes the source ZIP URL (`ftp_url`), member path (`source_file`),
+`document_id`, score, FTS previews, and `matched_chunk`.
+The chunk is `{chunk_id, chunk_index, text}` or `null`.
+Use the entry's URL and path for a source-specific read.
 
-TDoc FTS5 searches metadata and SQL-stored content documents (CR annexes and
-the main documents and annexes of WID, LS, and discussion TDocs). It retains
-whole-document matching and additionally indexes every extracted `.ppt` and
-`.pptx` text chunk, independent of the semantic cap. If a whole-document query
-matches terms spread across chunks but no single chunk satisfies the full
-expression, the source remains a result with `matched_chunk: null`. A
-whole-document Word FTS match may also have no source chunk.
+TDoc FTS5 searches metadata and SQL-stored content documents.
+These documents include CR annexes and main documents and annexes of WID, LS,
+and discussion TDocs.
+FTS5 searches whole documents and indexes every extracted `.ppt` and `.pptx`
+text chunk, regardless of the semantic cap.
+A whole-document match can have `matched_chunk: null`.
+This can occur when query terms span chunks or a Word match has no source chunk.
 
-Semantic results may include source matches and expose only a verified vector
-chunk. The existing `semantic_search.max_content_chunks_per_tdoc` limit (default
-16) is shared across a TDoc's stored content documents; it is not a separate
-allowance per file. Later chunks or documents can therefore be outside vector
-coverage even though FTS5 indexes all presentation chunks. Hybrid results union
-distinct FTS5 and vector source matches, retain FTS previews, and prefer a
-verified vector chunk for a shared source, falling back to a verified FTS
-chunk. Missing, stale, or legacy vector provenance stays `null` rather than
-being guessed.
 
-For an existing main database, run `doc3gpp db init --scope main`, then
-`doc3gpp tdoc index --rebuild` to build presentation text chunks. Run
-`doc3gpp tdoc index --rebuild-embeddings` to replace legacy vectors without
-trusted chunk text; semantic rebuilding requires the configured embedding
-service. These rebuilds use stored SQL content rather than downloading or
-reparsing ZIP files. Presentation extraction is text-only: it does not add
-image/chart OCR or specification TOC, section, or table metadata.
-
-Semantic search requires its configured embedding service.
-Parsing normally attempts automatic indexing.
-Indexing can fail independently.
-
-1. If text search reports an unavailable or corrupt index, inspect `get_tdoc_index` or `get_spec_doc_index`.
-2. Use `index_tdocs({"rebuild":true})` or `index_spec_docs({"rebuild":true})` when necessary.
-3. Poll the returned job.
 
 ## Example: investigate a meeting and its spec text
 

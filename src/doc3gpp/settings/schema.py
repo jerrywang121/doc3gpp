@@ -889,19 +889,16 @@ class ServerSettings(BaseModel):
 
 
 class MCPSettings(BaseModel):
-    """Knobs for the MCP sub-app mounted under ``doc3gpp server``.
+    """Knobs for standalone stdio and HTTP-mounted MCP tools.
 
-    :attr:`enabled` defaults to ``True`` because MCP has no effect
-    until :class:`ServerSettings.enabled` is also ``True``; the
-    effective gate is the AND of the two. Keeping the per-side flag
-    lets operators stage a config that disables MCP before turning
-    the server on.
+    :attr:`enabled` defaults to ``True`` and gates both the standalone
+    stdio command and the HTTP MCP mount. The HTTP mount additionally
+    requires :class:`ServerSettings.enabled`; stdio does not.
 
-    :attr:`transport` selects the HTTP transport: ``streamable_http``
+    :attr:`transport` selects only the HTTP transport: ``streamable_http``
     (default, a single POST endpoint) or ``sse`` (the legacy two-endpoint
-    GET ``/sse`` + POST ``/messages/`` protocol). The legacy stdio
-    transport is intentionally absent — it would conflict with the
-    per-request lifecycle the HTTP surface expects.
+    GET ``/sse`` + POST ``/messages/`` protocol). The standalone
+    ``doc3gpp mcp`` command always uses stdio.
 
     :attr:`sse_queue_size` bounds the in-process queue length that
     fans events out to active MCP sessions; values below 10 cause
@@ -914,17 +911,17 @@ class MCPSettings(BaseModel):
     enabled: bool = Field(
         default=True,
         description=(
-            "Per-side MCP switch. Effective only when "
-            "[server].enabled is also true. False disables the MCP "
-            "mount without touching the rest of the server."
+            "Enable both the HTTP MCP mount and the standalone stdio command. "
+            "The HTTP mount also requires [server].enabled; stdio does not."
         ),
     )
     transport: Literal["streamable_http", "sse"] = Field(
         default="streamable_http",
         description=(
-            "HTTP transport used by the MCP mount. streamable_http is a "
-            "single POST endpoint; sse uses the legacy two-endpoint "
-            "GET /sse + POST /messages/ protocol."
+            "Transport for the HTTP MCP mount only; it does not affect the "
+            "standalone stdio command. streamable_http is a single POST "
+            "endpoint; sse uses the legacy two-endpoint GET /sse + POST "
+            "/messages/ protocol."
         ),
     )
     sse_queue_size: int = Field(

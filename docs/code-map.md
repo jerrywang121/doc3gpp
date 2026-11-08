@@ -11,6 +11,7 @@ command syntax in [cli.md](cli.md). Paths below are relative to the repository.
 | Typer apps, commands, rendering selection, direct-mode entry points | `src/doc3gpp/cli.py` |
 | CLI input filters / auto-sync | `src/doc3gpp/cli_filters.py`, `src/doc3gpp/cli_auto_sync.py` |
 | Server start/stop/status/logs/install | `src/doc3gpp/cli_server.py`, `src/doc3gpp/web/install.py` |
+| Top-level `doc3gpp mcp` command / stdio runtime | `src/doc3gpp/cli.py`, `src/doc3gpp/web/mcp_stdio.py` |
 | `Settings`, nested settings, `ALLOWED_ENV_VARS` | `src/doc3gpp/settings/schema.py` |
 | `find_config_file`, `load_config_data` | `src/doc3gpp/settings/config_source.py` |
 | Cached `get_settings` | `src/doc3gpp/settings/loader.py` |
@@ -76,6 +77,10 @@ command syntax in [cli.md](cli.md). Paths below are relative to the repository.
 | MCP tool registration and payloads | `src/doc3gpp/web/mcp_server.py` |
 | Job kinds/SQL/worker/handlers | `src/doc3gpp/models/jobs.py`, `src/doc3gpp/storage/repositories/jobs_sql.py`, `src/doc3gpp/web/workers/job_worker.py`, `src/doc3gpp/web/workers/handlers.py` |
 | Templates / HTMX / sync hub | `src/doc3gpp/web/templates/`, `src/doc3gpp/web/filters.py`, `src/doc3gpp/web/static/js/sync_hub.js` |
+
+`server.enabled` gates the HTTP server and HTTP MCP mount, while `mcp.enabled`
+gates both the HTTP mount and standalone `doc3gpp mcp` stdio. The MCP transport
+setting selects the HTTP mount only.
 
 ## Tests and development
 

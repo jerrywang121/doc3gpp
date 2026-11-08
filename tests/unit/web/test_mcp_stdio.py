@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
@@ -35,6 +36,8 @@ class _FakeState:
     specdata_engine: _FakeEngine | None
     jobs: object | None = None
     close_docx_pool: Callable[[], None] | None = None
+    close_embedder: Callable[[], None] | None = None
+    services: SimpleNamespace = field(default_factory=SimpleNamespace)
 
 
 class _FakeHandle:
@@ -44,6 +47,7 @@ class _FakeHandle:
         self.max_concurrent_jobs = max_concurrent_jobs
         self.task: asyncio.Task | None = None
         self.shutdown_calls = 0
+        self.pipeline = None
         self.__class__.instances.append(self)
 
     async def shutdown(self) -> None:
@@ -51,6 +55,8 @@ class _FakeHandle:
         if self.task is not None and not self.task.done():
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        if self.pipeline is not None:
+            await self.pipeline.shutdown_async(cancel_pending_preparation=True)
 
 
 class _FakeWorker:
@@ -251,3 +257,51 @@ def test_dependency_error_happens_before_state_composition(
 
     with pytest.raises(mcp_stdio.MCPStdioDependencyError, match="web extra"):
         asyncio.run(mcp_stdio.run_stdio(settings))
+
+
+@pytest.mark.parametrize(
+    "server",
+    [object(), SimpleNamespace(run_stdio_async=None)],
+    ids=["missing-method", "non-callable-method"],
+)
+def test_incompatible_server_reports_upgrade_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+    server: object,
+) -> None:
+    settings = Settings()
+    state = _state(settings)
+    _FakeHandle.instances.clear()
+    deps = replace(_dependencies(state, []), build_mcp_server=lambda _state: server)
+    monkeypatch.setattr(mcp_stdio, "_load_dependencies", lambda: deps)
+
+    with pytest.raises(mcp_stdio.MCPStdioDependencyError, match="pip install --upgrade mcp"):
+        asyncio.run(mcp_stdio.run_stdio(settings))
+
+    assert _FakeHandle.instances[0].shutdown_calls == 1
+    assert state.engine.dispose_calls == 1
+    assert state.testcase_engine.dispose_calls == 1
+    assert state.specdata_engine is not None
+    assert state.specdata_engine.dispose_calls == 1
+
+
+def test_attribute_error_inside_stdio_server_is_not_treated_as_dependency_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenServer:
+        async def run_stdio_async(self) -> None:
+            raise AttributeError("internal server bug")
+
+    settings = Settings()
+    state = _state(settings)
+    _FakeHandle.instances.clear()
+    deps = replace(_dependencies(state, []), build_mcp_server=lambda _state: BrokenServer())
+    monkeypatch.setattr(mcp_stdio, "_load_dependencies", lambda: deps)
+
+    with pytest.raises(AttributeError, match="internal server bug"):
+        asyncio.run(mcp_stdio.run_stdio(settings))
+
+    assert _FakeHandle.instances[0].shutdown_calls == 1
+    assert state.engine.dispose_calls == 1
+    assert state.testcase_engine.dispose_calls == 1
+    assert state.specdata_engine is not None
+    assert state.specdata_engine.dispose_calls == 1

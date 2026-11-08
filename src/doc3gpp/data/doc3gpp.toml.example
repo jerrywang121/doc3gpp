@@ -333,7 +333,8 @@ search_fanout_factor = 4
 timeout_seconds = 300
 
 [server]
-# Master switch for the `doc3gpp server` sub-app.
+# Master switch for the `doc3gpp server` sub-app and HTTP MCP mount.
+# The standalone `doc3gpp mcp` command does not check this setting.
 enabled = true
 
 # Bind address. Defaults to loopback so the server is not reachable
@@ -379,19 +380,20 @@ port = 13999
 # pid_file = "/var/run/doc3gpp/server.pid"
 # log_file = "/var/log/doc3gpp/server.log"
 
-# ── MCP sub-app mount ───────────────────────────────────────────────────────
-# Knobs for the Model Context Protocol (MCP) sub-app mounted under the
-# HTTP server. Effective only when [server].enabled is also true.
+# ── MCP configuration ────────────────────────────────────────────────────────
+# MCP tools are available through the HTTP mount when [server].enabled is
+# also true, or through the standalone foreground `doc3gpp mcp` stdio command.
 
 # [mcp]
-# Per-side MCP switch. False disables the MCP mount without touching
-# the rest of the server (the FastAPI surface stays up).
+# MCP switch, true by default. False disables both the HTTP MCP mount and
+# standalone stdio command without disabling the rest of the HTTP server.
 # enabled = true
 
-# HTTP transport used by the MCP mount. streamable_http (default) is a
+# HTTP transport used only by the MCP mount. streamable_http (default) is a
 # single POST endpoint answered with a plain application/json body (the
 # mode every modern MCP client, including the TypeScript SDK, expects);
 # sse uses the legacy two-endpoint protocol (GET /sse + POST /messages/).
+# The standalone `doc3gpp mcp` command always uses stdio.
 # transport = "streamable_http"
 
 # Per-session event queue length for the SSE pipe. Values below 10

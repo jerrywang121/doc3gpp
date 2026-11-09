@@ -12,7 +12,7 @@ def install_fake_libreoffice(monkeypatch, tmp_path, conversions: dict[bytes, byt
     executable_dir = tmp_path / "office-bin"
     executable_dir.mkdir()
     outputs = {source: base64.b64encode(output).decode("ascii") for source, output in conversions.items()}
-    executable = executable_dir / "libreoffice"
+    executable = executable_dir / ("libreoffice.py" if os.name == "nt" else "libreoffice")
     executable.write_text(
         f"#!{sys.executable}\n"
         "import base64, sys\n"
@@ -28,4 +28,9 @@ def install_fake_libreoffice(monkeypatch, tmp_path, conversions: dict[bytes, byt
         encoding="utf-8",
     )
     executable.chmod(0o755)
+    if os.name == "nt":
+        # Windows locates batch files via PATHEXT rather than Unix shebangs.
+        (executable_dir / "libreoffice.cmd").write_text(
+            f'@"{sys.executable}" "{executable}" %*\r\n', encoding="utf-8", newline=""
+        )
     monkeypatch.setenv("PATH", str(executable_dir), prepend=os.pathsep)

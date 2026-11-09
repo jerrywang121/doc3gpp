@@ -9,7 +9,6 @@ during the call.
 from __future__ import annotations
 
 import io
-import os
 import zipfile
 from unittest.mock import MagicMock
 
@@ -71,20 +70,14 @@ class _RecordingPool:
         self._inner = inner
         self.calls: list[tuple[str, list[str]]] = []
         self.worker_pids: set[int] = set()
+        self.worker_processes = []
 
     def convert_members(self, kind, members):
         self.calls.append((kind, [name for name, _ in members]))
         outcomes = self._inner.convert_members(kind, members)
         self.worker_pids.update(self._inner._executor._processes)
+        self.worker_processes = list(self._inner._executor._processes.values())
         return outcomes
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
 
 
 def _spec_service(tmp_path, docx_pool=None) -> SpecDocService:
@@ -170,7 +163,8 @@ def test_convert_tdoc_zip_pool_matches_in_process(tmp_path) -> None:
     assert len(inline.documents) == 4
     assert inline.skipped_sources == ()
     assert pooled == inline
-    assert not any(_pid_alive(pid) for pid in recording.worker_pids)
+    assert recording.worker_processes
+    assert not any(process.is_alive() for process in recording.worker_processes)
 
 
 

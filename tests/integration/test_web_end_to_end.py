@@ -809,7 +809,7 @@ def test_tdoc_content_by_url_legacy_text_marks_incomplete(
     with TestClient(app) as client:
         cache_path = app.state.web.settings.cache.dir / "markdown" / cache_file
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(markdown, encoding="utf-8")
+        cache_path.write_bytes(markdown.encode("utf-8"))
         response = client.get(
             "/tdocs/by-url/content",
             params={"ftp_url": ftp_url, "format": "markdown"},

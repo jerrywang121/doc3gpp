@@ -968,6 +968,7 @@ def test_cli_stdio_wire_excludes_late_loop_teardown_diagnostics(outcome: str) ->
 
         original_stdout = sys.stdout
         started = asyncio.Event()
+        background_tasks = set()
         cli.get_settings = lambda: Settings()
         class Worker:
             def __init__(self, state): pass
@@ -983,8 +984,13 @@ def test_cli_stdio_wire_excludes_late_loop_teardown_diagnostics(outcome: str) ->
                         print("late loop diagnostic")
                         print("late retained stdout diagnostic", file=original_stdout)
                         os.write(1, b"late fd diagnostic\\n")
-                asyncio.create_task(late_task())
+                task = asyncio.create_task(late_task())
+                background_tasks.add(task)
+                task.add_done_callback(background_tasks.discard)
                 await started.wait()
+                await asyncio.sleep(0)
+                import gc
+                gc.collect()
                 await MCPServer("stdio-teardown-test").run_stdio_async()
                 if sys.argv[1] == "cancel":
                     raise asyncio.CancelledError()

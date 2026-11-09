@@ -16,11 +16,14 @@ import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
-from doc3gpp.settings.config_writer import write_toml
+from doc3gpp.settings.config_writer import read_toml, write_toml
 
 
-def _mode(path: Path) -> int:
-    return stat.S_IMODE(path.stat().st_mode)
+def _assert_mode(path: Path, expected: int) -> None:
+    assert path.is_file()
+    # Windows chmod exposes a read-only flag, not POSIX group/other permissions.
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == expected
 
 
 @pytest.fixture()
@@ -49,7 +52,8 @@ def test_write_toml_keeps_existing_mode_by_default(tmp_path):
 
     write_toml(path, {"sync": {"auto_sync": True}})
 
-    assert _mode(path) == 0o644
+    assert read_toml(path)["sync"]["auto_sync"] is True
+    _assert_mode(path, 0o644)
 
 
 def test_write_toml_applies_explicit_mode(tmp_path):
@@ -59,7 +63,8 @@ def test_write_toml_applies_explicit_mode(tmp_path):
 
     write_toml(path, {"sync": {"auto_sync": True}}, mode=0o600)
 
-    assert _mode(path) == 0o600
+    assert read_toml(path)["sync"]["auto_sync"] is True
+    _assert_mode(path, 0o600)
 
 
 def test_config_init_user_target_is_private(clean_env, tmp_path, monkeypatch):
@@ -69,7 +74,7 @@ def test_config_init_user_target_is_private(clean_env, tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["config", "init", "--target", "user"])
 
     assert result.exit_code == 0, result.output
-    assert _mode(target) == 0o600
+    _assert_mode(target, 0o600)
 
 
 def test_config_init_force_overwrite_restricts_mode(clean_env, tmp_path, monkeypatch):
@@ -81,7 +86,7 @@ def test_config_init_force_overwrite_restricts_mode(clean_env, tmp_path, monkeyp
     result = CliRunner().invoke(app, ["config", "init", "--target", "user", "--force"])
 
     assert result.exit_code == 0, result.output
-    assert _mode(target) == 0o600
+    _assert_mode(target, 0o600)
 
 
 def test_config_set_keeps_project_file_mode(clean_env, tmp_path, monkeypatch):
@@ -93,4 +98,4 @@ def test_config_set_keeps_project_file_mode(clean_env, tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["config", "set", "sync.auto_sync", "true"])
 
     assert result.exit_code == 0, result.output
-    assert _mode(cfg) == 0o644
+    _assert_mode(cfg, 0o644)

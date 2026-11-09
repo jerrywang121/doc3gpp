@@ -8,6 +8,7 @@ import queue
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 from threading import Thread
 from types import SimpleNamespace
@@ -987,11 +988,12 @@ def test_cli_stdio_wire_excludes_late_loop_teardown_diagnostics(outcome: str) ->
                 task = asyncio.create_task(late_task())
                 background_tasks.add(task)
                 task.add_done_callback(background_tasks.discard)
+                del task
                 await started.wait()
                 await asyncio.sleep(0)
+                await MCPServer("stdio-teardown-test").run_stdio_async()
                 import gc
                 gc.collect()
-                await MCPServer("stdio-teardown-test").run_stdio_async()
                 if sys.argv[1] == "cancel":
                     raise asyncio.CancelledError()
                 if sys.argv[1] == "failure":
@@ -1009,6 +1011,7 @@ def test_cli_stdio_wire_excludes_late_loop_teardown_diagnostics(outcome: str) ->
         except (asyncio.CancelledError, RuntimeError) as exc:
             print("propagated " + type(exc).__name__, file=sys.stderr)
     ''')
+    deadline = time.monotonic() + 30
     process = subprocess.Popen(
         [sys.executable, "-c", code, outcome], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, env={
@@ -1027,9 +1030,12 @@ def test_cli_stdio_wire_excludes_late_loop_teardown_diagnostics(outcome: str) ->
         lines: queue.Queue[bytes] = queue.Queue()
         Thread(target=lambda: lines.put(process.stdout.readline()), daemon=True).start()
         try:
-            first_line = lines.get(timeout=10)
+            first_line = lines.get(timeout=max(0, deadline - time.monotonic()))
         except queue.Empty:
-            pytest.fail("server did not produce an initialize response")
+            pytest.fail(
+                "server did not produce an initialize response "
+                f"(child exit status: {process.poll()})"
+            )
         assert first_line, "server closed stdout without an initialize response"
         for message in (
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -1039,11 +1045,16 @@ def test_cli_stdio_wire_excludes_late_loop_teardown_diagnostics(outcome: str) ->
         process.stdin.flush()
         Thread(target=lambda: lines.put(process.stdout.readline()), daemon=True).start()
         try:
-            second_line = lines.get(timeout=10)
+            second_line = lines.get(timeout=max(0, deadline - time.monotonic()))
         except queue.Empty:
-            pytest.fail("server did not produce a tools/list response")
+            pytest.fail(
+                "server did not produce a tools/list response "
+                f"(child exit status: {process.poll()})"
+            )
         assert second_line, "server closed stdout without a tools/list response"
-        remaining, stderr = process.communicate(timeout=12)
+        timeout_left = deadline - time.monotonic()
+        assert timeout_left > 0, "stdio subprocess exceeded its 30-second deadline"
+        remaining, stderr = process.communicate(timeout=timeout_left)
         assert process.returncode == 0, stderr.decode()
         messages = [json.loads(line) for line in (first_line + second_line + remaining).splitlines()]
         assert any(message.get("id") == 1 and "result" in message for message in messages)

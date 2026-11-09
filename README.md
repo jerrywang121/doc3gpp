@@ -44,10 +44,12 @@ best-effort [auto-sync](docs/processes.md#auto-sync); disable it for offline use
 doc3gpp config set sync.auto_sync false
 ```
 
-Start the optional local web/MCP server with `doc3gpp server start` after
-installing `[web]` or `[all]`. The UI is at <http://127.0.0.1:13999/>;
-the default MCP URL is `http://127.0.0.1:13999/mcp/`.
-There is no built-in authentication: keep it on a trusted local machine.
+For local MCP or the web server on a fresh installation, run
+`pip install "doc3gpp[cli,web]"`. Run `doc3gpp mcp` for stdio, or
+`doc3gpp server start` for the UI at <http://127.0.0.1:13999/> and MCP at
+`http://127.0.0.1:13999/mcp/`.
+There is no built-in authentication: keep the HTTP server on a trusted local
+machine. See [MCP connections](docs/mcp.md#connect) for client configuration.
 
 ## Documentation
 

@@ -122,6 +122,20 @@ runtime context see [processes](processes.md); proposed work is in [TODO](TODO.m
   processes sharing the database can interfere with ownership/recovery.
 - Cancellation is cooperative, not preemptive and not a rollback. A running
   converter/network call or submitted writer can finish after cancellation.
+- Stdio shutdown waits for in-flight handlers, its own worker threads, and the
+  pipeline before closing shared resources. Cancellation is cooperative; a stuck
+  handler or thread can delay shutdown indefinitely. The worker's blocking calls
+  use a stdio-owned executor; an embedding event loop's default executor remains
+  available and unrelated work there is not drained. The stdio CLI protects
+  protocol stdout through event-loop teardown. Callers embedding `run_stdio` must
+  protect stdout through their own loop teardown and cancel and await `run_stdio`
+  to completion **before** host-wide task cancellation (such as `asyncio.run()`
+  teardown). Otherwise direct cancellation of SDK request tasks can detach
+  AnyIO tool threads, which may outlive shared resources. Normal awaited EOF,
+  MCP request cancellation, and cancellation of `run_stdio` itself are separate
+  supported shutdown paths. If a worker or pipeline drain cannot be started or
+  completed, stdio preserves shared resources and reports the cleanup failure
+  rather than risk closing them while work is still running.
 - Only participating operations use the shared single persistence executor;
   other SQL writes can contend. WAL/busy timeouts reduce, not eliminate, locks.
 - A conversion-process death can fail other callers' unfinished conversions

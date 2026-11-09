@@ -21,10 +21,23 @@ def test_server_defaults() -> None:
 
 
 def test_mcp_defaults() -> None:
-    """``MCPSettings`` enables streamable_http by default and gates on ``server.enabled``."""
+    """``MCPSettings`` enables MCP and uses streamable_http by default."""
     settings = Settings()
     assert settings.mcp.enabled is True
     assert settings.mcp.transport == "streamable_http"
+
+
+def test_mcp_enabled_schema_description_documents_both_gates() -> None:
+    description = MCPSettings.model_json_schema()["properties"]["enabled"]["description"]
+    assert "both the HTTP MCP mount and the standalone stdio command" in description
+    assert "HTTP mount also requires [server].enabled" in description
+    assert "stdio does not" in description
+
+
+def test_mcp_transport_schema_description_limits_scope_to_http() -> None:
+    description = MCPSettings.model_json_schema()["properties"]["transport"]["description"]
+    assert "HTTP MCP mount only" in description
+    assert "does not affect the standalone stdio command" in description
 
 
 def test_server_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -71,11 +71,19 @@ Search email meetings and workshops separately from regular RAN5 meetings.
 
 ## Connect and run jobs
 
-Connect an MCP client to the app's default Streamable HTTP endpoint `http://127.0.0.1:13999/mcp`.
-Configuration may change the host/port.
-The server requires the `doc3gpp[web]` extra and both `[server] enabled` and `[mcp] enabled`.
-The `doc3gpp server start --no-open` command starts it.
+For a fresh installation, use `pip install "doc3gpp[cli,web]"`.
+A local stdio MCP client can launch `doc3gpp mcp` as a foreground subprocess.
+Stdio requires only `[mcp] enabled = true`; it works when `[server] enabled = false` and binds no HTTP port.
+Stdout is reserved for MCP protocol messages; diagnostics go to stderr.
+
+Alternatively, run `doc3gpp server start --no-open` and connect an HTTP MCP client to `http://127.0.0.1:13999/mcp/` by default.
+HTTP MCP requires both `[server] enabled = true` and `[mcp] enabled = true`; both default to true.
+Configuration may change the host/port; `[mcp] transport` selects only the HTTP transport and does not affect stdio.
 For legacy SSE configurations, connect to `/mcp/sse` instead.
+
+Set these switches in TOML; nested `DOC3GPP_SERVER__*` and `DOC3GPP_MCP__*` process environment variables are not allowlisted.
+Config discovery checks `DOC3GPP_CONFIG`, then `./doc3gpp.toml`, then the user config; the first matching file wins.
+The job queue is single-process: concurrent HTTP or stdio workers sharing a database can interfere with job ownership and recovery.
 
 The MCP tool names below are literal.
 The JSON objects are tool **arguments**, not HTTP request bodies.

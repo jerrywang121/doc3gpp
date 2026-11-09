@@ -62,6 +62,17 @@ Important change entry points:
   `web/state.py`; cancellation is cooperative and queue ownership single-process.
 - MCP: `web/mcp_server.py`; `get_skill` returns packaged raw Markdown, other
   matching JSON reads share HTTP payloads. Register tools, not duplicate queries.
+  `web/mcp_stdio.py` owns `doc3gpp mcp`, reusing `build_state` and
+  `build_mcp_server` with the shared job worker. `mcp.enabled` gates both MCP
+  surfaces; HTTP also requires `server.enabled`, while stdio does not.
+  `mcp.transport` selects HTTP `streamable_http` or `sse` only. Keep the queue's single-process
+  constraint and stdio shutdown caveats in [known constraints](docs/known-constraints.md#pools-jobs-and-deployment).
+  Stdio drains in-flight work and its own worker executor before closing shared
+  resources, without draining the embedding loop's default executor; it must not
+  use the HTTP handle's bounded shutdown first. Route new blocking job-handler
+  calls through the shared worker `_to_thread` helper so stdio can drain them.
+  Failed drains preserve resources; embedding callers must cancel and await
+  `run_stdio` before host-wide task teardown, which can detach SDK tool threads.
 
 See the linked process/constraint guides before changing skip rules, force,
 cache recovery, semantic freshness, or resource ownership. In particular,

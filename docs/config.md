@@ -250,7 +250,7 @@ Under `[server]`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | Permit server commands |
+| `enabled` | `true` | Permit HTTP server commands and its MCP mount; does not gate stdio |
 | `host` / `port` | `"127.0.0.1"` / `13999` | Bind address |
 | `max_concurrent_jobs` | `3` | Active jobs, range `1..16`; not item workers |
 | `poll_interval_seconds` | `1.0` | Queue pickup cadence, `0.05..60` |
@@ -265,8 +265,8 @@ Under `[mcp]`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | Mount MCP when the server is also enabled |
-| `transport` | `"streamable_http"` | `streamable_http` or legacy `sse` |
+| `enabled` | `true` | Enable `doc3gpp mcp` stdio and the HTTP MCP mount (the latter also requires `server.enabled`) |
+| `transport` | `"streamable_http"` | HTTP MCP mount only: `streamable_http` or legacy `sse`; stdio is unaffected |
 | `sse_queue_size` | `100` | Bounded event queue setting, minimum `10` |
 | `allowed_origins` | `["http://127.0.0.1", "http://localhost"]` | MCP transport origin allowlist |
 
@@ -274,6 +274,9 @@ See [pool and job behavior](processes.md#pools-and-background-jobs),
 [server operation](web-server.md), and [MCP transport security](mcp.md#security).
 Binding to another address does not automatically change the MCP SDK's allowed
 host policy or provide authentication.
+HTTP and stdio both start a job worker; use only one worker process per database
+to avoid interference with job ownership and recovery. See
+[runtime constraints](known-constraints.md#pools-jobs-and-deployment).
 
 ## Optional dependencies
 

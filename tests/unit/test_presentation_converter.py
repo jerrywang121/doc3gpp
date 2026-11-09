@@ -10,7 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 from pptx.slide import Slide
@@ -167,7 +168,7 @@ def _mock_impress(monkeypatch, *, output: bytes | None) -> tuple[list, list[Path
         assert source.read_bytes() == b"legacy PPT bytes"
         profile_arg = next(arg for arg in command if arg.startswith("-env:UserInstallation="))
         profile_uri = profile_arg.split("=", 1)[1]
-        profile = Path(unquote(urlparse(profile_uri).path))
+        profile = Path(url2pathname(urlparse(profile_uri).path))
         assert profile.parent == source.parent
         assert profile.name == "profile"
         assert command[command.index("--convert-to") + 1] == (

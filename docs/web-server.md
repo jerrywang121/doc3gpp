@@ -20,9 +20,15 @@ embedding endpoint if vector/hybrid search is needed, or install `[all]`.
 Legacy Office conversion additionally requires LibreOffice.
 
 Keep the server on a trusted local machine: **there is no authentication**.
-Use one server process per database; worker recovery does not coordinate
-multiple processes. A non-loopback bind requires your own access controls and
-does not automatically relax MCP host/origin restrictions.
+Use one HTTP or stdio worker process per database; worker recovery does not
+coordinate multiple processes. A non-loopback bind requires your own access
+controls and does not automatically relax MCP host/origin restrictions.
+
+`server.enabled` and `mcp.enabled` both default to true. The HTTP server is
+gated by `server.enabled`, and its MCP mount additionally requires
+`mcp.enabled`; the standalone `doc3gpp mcp` command checks only `mcp.enabled`.
+The `mcp.transport` setting selects the HTTP transport only. See
+[MCP connections](mcp.md#connect) for stdio installation and a client example.
 
 ### Process management
 

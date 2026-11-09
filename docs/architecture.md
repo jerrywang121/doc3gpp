@@ -51,6 +51,14 @@ background worker and shared `PipelineRuntime`, and injects services through
 search/parse/index services. Shutdown drains work before closing resources and
 disposing the main/testcase/specdata engines.
 
+`doc3gpp mcp` builds the same `WebState` and MCP tool registry, starts the
+shared job worker, and runs the MCP SDK's stdio transport. It checks
+`mcp.enabled` independently of `server.enabled`; the HTTP MCP mount requires
+both. On EOF it attempts worker and resource cleanup, including engine disposal;
+shutdown is not a guaranteed process-exit deadline. The queue is single-process,
+so concurrent HTTP/stdio workers sharing a database can interfere. See
+[runtime constraints](known-constraints.md#pools-jobs-and-deployment).
+
 Ordinary CLI commands call factory-built services, not SQL repositories.
 Server-management status/log helpers are an explicit adapter-level exception
 for job/process inspection. HTTP routes and MCP tools reuse service/render

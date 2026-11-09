@@ -3217,6 +3217,31 @@ Only allowlisted process environment variables override TOML. The dotenv source
 is broader and lower-priority; see [precedence and caveats](config.md#discovery-and-precedence).
 The CLI value `null` removes an optional key; TOML itself has no null literal.
 
+## mcp Command
+
+### `doc3gpp mcp`
+
+Run the shared MCP tool registry in the foreground over stdio. For a fresh
+installation, install both extras and initialize the databases:
+
+```bash
+pip install "doc3gpp[cli,web]"
+doc3gpp db init --scope all
+doc3gpp mcp
+```
+
+`mcp.enabled` defaults to `true`; setting it to false refuses the command before
+database composition. `server.enabled` also defaults to `true`, but is not
+checked for stdio. `mcp.transport` selects only the HTTP MCP transport
+(`streamable_http` or `sse`); the command always uses stdio.
+
+Stdout is reserved for MCP protocol messages, without a status banner;
+diagnostics and missing-dependency hints go to stderr. Client EOF initiates
+worker and resource cleanup, but does not guarantee prompt process exit. The
+job queue is single-process: concurrent HTTP/stdio worker processes sharing a
+database can interfere. See [MCP connections](mcp.md#local-stdio-client) and
+[runtime constraints](known-constraints.md#pools-jobs-and-deployment).
+
 ## server Commands
 
 The `doc3gpp server` group starts, inspects and supervises the HTTP server +

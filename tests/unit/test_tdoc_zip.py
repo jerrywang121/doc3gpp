@@ -8,6 +8,7 @@ import importlib
 import importlib.util
 import io
 import json
+import os
 import zipfile
 
 import pytest
@@ -564,7 +565,7 @@ def test_zip_inventory_preserves_outer_file_entries_without_reading_members(monk
         "~$lock.docx",
         "nested.zip",
         "日本語/文書.pdf",
-        r"a\b.txt",
+        r"a\b.txt".replace(os.sep, "/"),
         "../unsafe.txt",
         "dup.pdf",
         "dup.pdf",

@@ -1,17 +1,51 @@
 # MCP integration
 
-doc3gpp exposes Model Context Protocol tools through the optional local web
-server. For server installation/operation see [web-server.md](web-server.md);
-for settings see [config.md](config.md#pools-server-and-mcp). Tool calls reuse
-the same services and JSON payload builders as HTTP/CLI adapters.
+doc3gpp exposes Model Context Protocol tools through a standalone stdio command
+and the optional local web server. For HTTP operation see
+[web-server.md](web-server.md); for settings see
+[config.md](config.md#pools-server-and-mcp). Both MCP surfaces share the same
+tool registry and reuse services and JSON payload builders from HTTP/CLI adapters.
 
 ## Connect
 
+For a fresh installation, install both the CLI and web/MCP dependencies:
+
 ```bash
-pip install "doc3gpp[all]"
+pip install "doc3gpp[cli,web]"
 doc3gpp db init --scope all
-doc3gpp server start
 ```
+
+If the CLI is already installed, `pip install "doc3gpp[web]"` adds the web/MCP
+dependencies. Both `server.enabled` and `mcp.enabled` default to `true`.
+
+### Local stdio client
+
+Run `doc3gpp mcp` as a foreground subprocess in the working directory whose
+configuration and databases you want to use. It binds no HTTP port. Only
+`mcp.enabled` gates this command; `server.enabled` may be false. The
+`mcp.transport` setting selects the HTTP transport only and does not affect
+stdio. Stdout is reserved for MCP protocol messages; diagnostics go to stderr.
+
+For example, a compatible local client can launch:
+
+```json
+{
+  "mcpServers": {
+    "doc3gpp": {"command": "doc3gpp", "args": ["mcp"]}
+  }
+}
+```
+
+Client configuration keys vary; use the format required by your client and
+ensure its environment, working directory, and `PATH` find the intended config
+and executable. On client EOF, cleanup is attempted; shutdown is not guaranteed
+to be prompt. The command starts a background job worker: concurrent HTTP or
+stdio worker processes sharing a database can interfere with job ownership and
+recovery. See [runtime constraints](known-constraints.md#pools-jobs-and-deployment).
+
+### HTTP clients
+
+Start the HTTP server with `doc3gpp server start`.
 
 Configure an HTTP-capable MCP client with:
 
@@ -20,10 +54,8 @@ Configure an HTTP-capable MCP client with:
 | Streamable HTTP (default) | `http://127.0.0.1:13999/mcp/` | Single MCP endpoint; POST responses use `application/json` |
 | Legacy SSE | `http://127.0.0.1:13999/mcp/sse` | Only with `[mcp] transport = "sse"`; messages use `/mcp/messages/` |
 
-Use the trailing slash on the default mount to avoid redirects. There is no
-standalone doc3gpp stdio MCP command. Clients that only launch stdio subprocesses
-need a separately configured HTTP bridge or a client with HTTP support.
-Transport selection is server-wide; restart after changing it. The MCP mount
+Use the trailing slash on the default mount to avoid redirects. HTTP transport
+selection is server-wide; restart after changing it. The MCP mount
 is enabled only when both `server.enabled` and `mcp.enabled` are true and the
 MCP dependency loads successfully.
 
@@ -188,6 +220,7 @@ Binding the HTTP server to another host does not expand the MCP host allowlist.
 | Symptom | Check |
 | --- | --- |
 | `/mcp/` missing | Install `[web]`, check both enabled flags and server startup warnings |
+| Stdio command refuses to start | Check `mcp.enabled`, the executable/environment, and stderr for dependency hints |
 | “Legacy MCP SSE endpoints are not supported” | Use `streamable_http`, restart, point the client at `/mcp/`; default POST responses are plain JSON |
 | Client requests `/mcp/sse` but gets 404 | Transport mismatch; use the default URL or explicitly enable legacy SSE |
 | Origin/host rejected | Inspect the actual client Origin/Host and MCP security policy; this is separate from network binding |

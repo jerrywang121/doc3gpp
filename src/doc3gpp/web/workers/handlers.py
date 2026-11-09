@@ -16,6 +16,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar, copy_context
+from functools import partial
 from typing import ClassVar
 
 from doc3gpp.cli_auto_sync import (
@@ -70,6 +73,20 @@ appended by the worker when it resolves the handler (see
 :meth:`doc3gpp.web.workers.job_worker.JobWorker.run`)."""
 
 
+_worker_executor: ContextVar[ThreadPoolExecutor | None] = ContextVar(
+    "doc3gpp_worker_executor", default=None,
+)
+
+
+async def _to_thread(func, /, *args, **kwargs):
+    """Use the stdio-owned executor when set, otherwise preserve HTTP behavior."""
+    executor = _worker_executor.get()
+    if executor is None:
+        return await asyncio.to_thread(func, *args, **kwargs)
+    call = partial(copy_context().run, partial(func, *args, **kwargs))
+    return await asyncio.get_running_loop().run_in_executor(executor, call)
+
+
 def _build_meeting_url(tsg: str) -> str:
     """Compose the 3GPP DynaReport meeting-calendar URL for ``tsg``."""
     return f"https://www.3gpp.org/dynareport?code=Meetings-{tsg.upper()}.htm"
@@ -101,7 +118,7 @@ async def _sync_meetings(
     force = bool(job.params.get("force", False))
     if cancel_event.is_set():
         raise asyncio.CancelledError()
-    outcome = await asyncio.to_thread(
+    outcome = await _to_thread(
         services.meeting.sync,
         url,
         tsg=tsg,
@@ -138,7 +155,7 @@ async def _sync_wis(
     progress(f"syncing WIs for TSG {canonical_tsg}")
     if cancel_event.is_set():
         raise asyncio.CancelledError()
-    synced_count = await asyncio.to_thread(services.wi.sync, canonical_tsg)
+    synced_count = await _to_thread(services.wi.sync, canonical_tsg)
     if cancel_event.is_set():
         raise asyncio.CancelledError()
     reason = f"WI sync complete: {synced_count} rows stored for {canonical_tsg}"
@@ -166,7 +183,7 @@ async def _sync_tdocs(
         raise asyncio.CancelledError()
     if meeting_id is not None:
         progress(f"syncing TDocs for meeting id {meeting_id}")
-        outcome = await asyncio.to_thread(
+        outcome = await _to_thread(
             coordinator.sync_for_meeting_id,
             int(meeting_id),
             force=force,
@@ -174,7 +191,7 @@ async def _sync_tdocs(
         )
     elif meeting_name is not None:
         progress(f"syncing TDocs for meeting {meeting_name}")
-        outcome = await asyncio.to_thread(
+        outcome = await _to_thread(
             coordinator.sync_for_meeting_name,
             str(meeting_name),
             force=force,
@@ -207,7 +224,7 @@ async def _sync_tdocs_all(
     progress("syncing TDocs for all tracked meetings")
     if cancel_event.is_set():
         raise asyncio.CancelledError()
-    outcome = await asyncio.to_thread(
+    outcome = await _to_thread(
         services.tdoc_sync.sync_all_tracked_meetings,
         force=force,
         on_progress=progress,
@@ -265,7 +282,7 @@ async def _sync_specs(
     if cancel_event.is_set():
         raise asyncio.CancelledError()
     if spec_id is not None:
-        outcome = await asyncio.to_thread(
+        outcome = await _to_thread(
             services.spec.sync_spec,
             spec_id,
             force=force,
@@ -273,7 +290,7 @@ async def _sync_specs(
             on_progress=on_progress,
         )
     else:
-        outcome = await asyncio.to_thread(
+        outcome = await _to_thread(
             services.spec.sync,
             tsg,
             force=force,
@@ -312,7 +329,7 @@ async def _sync_testcases(
 
     if cancel_event.is_set():
         raise asyncio.CancelledError()
-    outcome = await asyncio.to_thread(
+    outcome = await _to_thread(
         services.testcase.sync, force=force, on_progress=on_progress
     )
     if cancel_event.is_set():
@@ -398,7 +415,7 @@ async def _parse_tdocs(
             raise asyncio.CancelledError()
         batch = tdoc_ids[start : start + max_batch]
         if runner is None:
-            result = await asyncio.to_thread(
+            result = await _to_thread(
                 services.tdoc_cr.extract_many,
                 batch,
                 force=force,
@@ -500,7 +517,7 @@ async def _parse_tdoc_url(
         if is_3gpp_file_url(url):
             failures: dict[str, str] = {}
             try:
-                result = await asyncio.to_thread(
+                result = await _to_thread(
                     services.tdoc_cr.extract_from_url,
                     url,
                     force=force,
@@ -517,7 +534,7 @@ async def _parse_tdoc_url(
                     results=[result], failures={}, skipped={}
                 )
         else:
-            batch = await asyncio.to_thread(
+            batch = await _to_thread(
                 services.tdoc_cr.extract_from_url_batch,
                 url,
                 max_depth=max_depth,
@@ -533,7 +550,7 @@ async def _parse_tdoc_url(
             # Discovery remains a synchronous, deterministic breadth-first
             # operation. Run it off the event loop, then hand its source order
             # to the shared async runner for preparation/persistence.
-            file_urls = await asyncio.to_thread(
+            file_urls = await _to_thread(
                 services.tdoc_cr.collect_3gpp_file_urls,
                 url,
                 max_depth=max_depth,
@@ -658,7 +675,7 @@ async def _parse_spec_docs(
     if cancel_event.is_set():
         raise asyncio.CancelledError()
     if services.pipeline is None:
-        result = await asyncio.to_thread(
+        result = await _to_thread(
             service.parse_many,
             [spec_id],
             release=release,
@@ -791,7 +808,7 @@ async def _run_index(
             raise asyncio.CancelledError()
         progress(message, force=True)
 
-    result = await asyncio.to_thread(
+    result = await _to_thread(
         service.rebuild,
         request,
         quiet=True,
@@ -863,9 +880,9 @@ async def _cache_purge(
         size_limit_bytes=settings.cache.size_limit_mb * 1024 * 1024,
     )
     if scope == "all":
-        deleted = await asyncio.to_thread(cache.purge)
+        deleted = await _to_thread(cache.purge)
     else:
-        deleted = await asyncio.to_thread(
+        deleted = await _to_thread(
             cache.purge_subdir,
             scope,  # type: ignore[arg-type]
         )

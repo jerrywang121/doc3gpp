@@ -224,6 +224,27 @@ def main_callback(
         typer.echo(ctx.get_help())
 
 
+@app.command("mcp")
+def mcp_command() -> None:
+    """Run the doc3gpp MCP server over stdio for a local harness."""
+    settings = get_settings()
+    if not settings.mcp.enabled:
+        typer.echo(
+            "Error: doc3gpp MCP is disabled. "
+            "Set `[mcp] enabled = true` in doc3gpp.toml and retry.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    from doc3gpp.web.mcp_stdio import MCPStdioDependencyError, _run_stdio_sync
+
+    try:
+        _run_stdio_sync(settings)
+    except MCPStdioDependencyError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+
 def _ensure_tsg_ready(tsg_service: TsgService) -> TsgService:
     """Auto-seed the TSG reference table on a fresh install."""
     if tsg_service.count() == 0:

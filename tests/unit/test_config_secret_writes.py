@@ -33,8 +33,11 @@ def clean_settings(monkeypatch: pytest.MonkeyPatch):
     get_settings.cache_clear()
 
 
-def _mode(path: Path) -> int:
-    return stat.S_IMODE(path.stat().st_mode)
+def _assert_private(path: Path) -> None:
+    assert path.is_file()
+    # POSIX permission bits do not describe Windows ACLs.
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_config_set_refuses_api_key_in_project_file(clean_settings, tmp_path, monkeypatch):
@@ -72,7 +75,7 @@ def test_config_set_api_key_in_project_file_with_flag_warns_and_restricts(
     assert read_toml(cfg)["semantic_search"]["embedding_api_key"] == "sekret"
     assert "plain text" in result.output
     assert "sekret" not in result.output
-    assert _mode(cfg) == 0o600
+    _assert_private(cfg)
 
 
 def test_config_set_api_key_in_user_config_warns_and_restricts(
@@ -91,7 +94,7 @@ def test_config_set_api_key_in_user_config_warns_and_restricts(
     assert result.exit_code == 0, result.output
     assert "plain text" in result.output
     assert "sekret" not in result.output
-    assert _mode(cfg) == 0o600
+    _assert_private(cfg)
 
 
 def test_config_set_restricts_user_config_permissions(clean_settings, tmp_path, monkeypatch):
@@ -104,4 +107,4 @@ def test_config_set_restricts_user_config_permissions(clean_settings, tmp_path, 
     result = CliRunner().invoke(app, ["config", "set", "sync.auto_sync", "true"])
 
     assert result.exit_code == 0, result.output
-    assert _mode(cfg) == 0o600
+    _assert_private(cfg)

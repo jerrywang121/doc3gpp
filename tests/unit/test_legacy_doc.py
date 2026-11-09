@@ -11,7 +11,8 @@ import sys
 import time
 import zipfile
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 
@@ -83,7 +84,7 @@ def office(monkeypatch, word_bytes):
         assert source.read_bytes() == b"legacy Word bytes"
         outdir = Path(args[args.index("--outdir") + 1])
         profile_arg = next(arg for arg in args if arg.startswith("-env:UserInstallation="))
-        profile = Path(unquote(urlparse(profile_arg.split("=", 1)[1]).path))
+        profile = Path(url2pathname(urlparse(profile_arg.split("=", 1)[1]).path))
         assert profile.is_relative_to(source.parent)
         workdirs.append(source.parent)
         profiles.append(profile)

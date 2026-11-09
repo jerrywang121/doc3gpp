@@ -1,5 +1,6 @@
 """Integration tests for SpecDocService fetch/parse/toc (Task 9)."""
 import io
+import os
 import zipfile
 from unittest.mock import MagicMock
 
@@ -424,7 +425,7 @@ def test_prepare_carries_inventory_without_writing(sqlite_env):
             "__MACOSX/meta",
             "nested.zip",
             "日本語/文書.docx",
-            r"folder\backslash.txt",
+            r"folder\backslash.txt".replace(os.sep, "/"),
             "readme.txt",
         ),
     )

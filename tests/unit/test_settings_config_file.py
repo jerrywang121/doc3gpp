@@ -227,10 +227,10 @@ def test_find_returns_none_when_no_config_exists(
     clean_settings, tmp_path, monkeypatch,
 ) -> None:
     """With ``DOC3GPP_CONFIG`` unset and no project-local file, the
-    XDG default is also absent because we point ``HOME`` at an empty
-    tmp dir.
+    XDG default is also absent because we point ``Path.home()`` at an empty
+    tmp dir on every platform.
     """
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     # Change into a directory with no doc3gpp.toml so project-local lookup misses.
     monkeypatch.chdir(tmp_path)
@@ -307,7 +307,7 @@ def test_find_xdg_default_when_no_project_local(
 
 
 def test_load_returns_empty_when_no_config(clean_settings, monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
     path, data = load_config_data()
@@ -693,7 +693,7 @@ def test_wi_list_uses_settings_default_fields(
 def test_config_path_with_no_file(
     clean_settings, monkeypatch, tmp_path,
 ) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
@@ -711,7 +711,7 @@ def test_config_path_with_env_var(clean_settings, write_toml, monkeypatch) -> No
 
 
 def test_config_show_emits_json(clean_settings, monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()

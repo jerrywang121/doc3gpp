@@ -170,7 +170,7 @@ def test_config_set_without_file_and_no_init_fails(
 ) -> None:
     """With no config in use, the command must exit non-zero and tell
     the operator to bootstrap one with ``doc3gpp config init``."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("DOC3GPP_CONFIG", raising=False)
     monkeypatch.chdir(tmp_path)

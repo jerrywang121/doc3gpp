@@ -15,6 +15,15 @@ pip install "doc3gpp[cli,extract]"
 pip install "doc3gpp[all]"
 ```
 
+Or install the CLI in an isolated, persistent environment with
+[uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install 'doc3gpp[all]'
+```
+
+If `doc3gpp` is not on your `PATH`, run `uv tool update-shell` and restart your shell.
+
 `pip install doc3gpp` installs the core SDK ([Python example](docs/README.md#python-sdk));
 CLI dependencies require `[cli]`.
 Use `[extract]` for `.docx`/`.pptx` extraction and `[semantic]` for SQLite vector
@@ -50,6 +59,36 @@ For local MCP or the web server on a fresh installation, run
 `http://127.0.0.1:13999/mcp/`.
 There is no built-in authentication: keep the HTTP server on a trusted local
 machine. See [MCP connections](docs/mcp.md#connect) for client configuration.
+
+## Agent Skill
+
+With Node.js (`npx`) and [uv](https://docs.astral.sh/uv/) installed, install the
+[doc3gpp skill](src/doc3gpp/data/skills/doc3gpp/SKILL.md) using Vercel's
+[Skills CLI](https://github.com/vercel-labs/skills), then initialize the databases:
+
+```bash
+npx --yes skills add https://github.com/jerrywang121/doc3gpp/tree/main/src/doc3gpp/data/skills/doc3gpp --skill doc3gpp -y
+uvx --from 'doc3gpp[all]' doc3gpp db init --scope all
+```
+
+The skill is installed in the current project for supported agents. Add this
+stdio configuration to your MCP client (the exact format depends on the client):
+
+```json
+{
+  "mcpServers": {
+    "doc3gpp": {
+      "command": "uvx",
+      "args": ["--from", "doc3gpp[all]", "doc3gpp", "mcp"]
+    }
+  }
+}
+```
+
+Use the same environment and working directory for initialization and the MCP
+client. The databases start without synced 3GPP data; use the skill's sync
+workflows to populate them. For database locations and advanced settings, see
+[configuration](docs/config.md).
 
 ## Documentation
 

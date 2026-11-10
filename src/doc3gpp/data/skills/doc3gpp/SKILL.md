@@ -71,18 +71,37 @@ Search email meetings and workshops separately from regular RAN5 meetings.
 
 ## Connect and run jobs
 
-For a fresh installation, use `pip install "doc3gpp[cli,web]"`.
-A local stdio MCP client can launch `doc3gpp mcp` as a foreground subprocess.
-Stdio requires only `[mcp] enabled = true`; it works when `[server] enabled = false` and binds no HTTP port.
-Stdout is reserved for MCP protocol messages; diagnostics go to stderr.
+For a fresh setup with [uv](https://docs.astral.sh/uv/), initialize all databases:
 
-Alternatively, run `doc3gpp server start --no-open` and connect an HTTP MCP client to `http://127.0.0.1:13999/mcp/` by default.
-HTTP MCP requires both `[server] enabled = true` and `[mcp] enabled = true`; both default to true.
-Configuration may change the host/port; `[mcp] transport` selects only the HTTP transport and does not affect stdio.
-For legacy SSE configurations, connect to `/mcp/sse` instead.
+```bash
+uvx --from 'doc3gpp[all]' doc3gpp db init --scope all
+```
 
-Set these switches in TOML; nested `DOC3GPP_SERVER__*` and `DOC3GPP_MCP__*` process environment variables are not allowlisted.
-Config discovery checks `DOC3GPP_CONFIG`, then `./doc3gpp.toml`, then the user config; the first matching file wins.
+Configure a local stdio MCP client to launch the server as a foreground subprocess:
+
+```bash
+uvx --from 'doc3gpp[all]' doc3gpp mcp
+```
+
+For a client using `mcpServers` JSON, use:
+
+```json
+{
+  "mcpServers": {
+    "doc3gpp": {
+      "command": "uvx",
+      "args": ["--from", "doc3gpp[all]", "doc3gpp", "mcp"]
+    }
+  }
+}
+```
+
+Run initialization and the MCP client with the same environment and working
+directory so they resolve the same configuration. The databases start without
+synced 3GPP data; use the sync workflows below to populate them.
+
+Alternatively, run `uvx --from 'doc3gpp[all]' doc3gpp server start --no-open` and connect an HTTP MCP client to `http://127.0.0.1:13999/mcp/` by default.
+
 The job queue is single-process: concurrent HTTP or stdio workers sharing a database can interfere with job ownership and recovery.
 
 The MCP tool names below are literal.

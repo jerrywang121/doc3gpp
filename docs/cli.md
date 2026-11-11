@@ -8,24 +8,22 @@ mismatches rather than treating advertised behavior as proof.
 
 ## Installation
 
-The CLI requires the `[cli]` extra on top of the core SDK:
+Install the CLI in an isolated tool environment with its `[cli]` extra:
 
 ```bash
-# via pip
-pip install "doc3gpp[cli]"
-
-# via pipx (isolated environment)
-pipx install "doc3gpp[cli]"
+uv tool install 'doc3gpp[cli]'
 
 # everything (CLI + extract + search + semantic + web/MCP)
-pip install "doc3gpp[all]"
+uv tool install 'doc3gpp[all]'
 
 # development (editable install)
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
-> **Note:** `pip install doc3gpp` installs the core SDK; use `[cli]` for the
-> dependencies needed to run the installed console entrypoint.
+> **Note:** For the Python SDK, add `doc3gpp` to the consuming project with
+> `uv add doc3gpp`. For the CLI, install the `[cli]` extra as shown above.
+> When changing extras on an existing tool installation, use `--reinstall` and
+> include every extra you want to retain.
 
 ## Command Entry
 
@@ -1349,7 +1347,7 @@ Exit codes:
 Install the optional extraction dependencies before first use:
 
 ```bash
-pip install "doc3gpp[extract]"
+uv tool install --reinstall 'doc3gpp[cli,extract]'
 ```
 
 Legacy `.doc` sources need LibreOffice Writer and legacy `.ppt` sources need
@@ -1655,7 +1653,7 @@ Install the optional dependency before first use (same as the
 filter path):
 
 ```bash
-pip install "doc3gpp[extract]"
+uv tool install --reinstall 'doc3gpp[cli,extract]'
 ```
 
 Examples:
@@ -3225,7 +3223,7 @@ Run the shared MCP tool registry in the foreground over stdio. For a fresh
 installation, install both extras and initialize the databases:
 
 ```bash
-pip install "doc3gpp[cli,web]"
+uv tool install 'doc3gpp[cli,web]'
 doc3gpp db init --scope all
 doc3gpp mcp
 ```

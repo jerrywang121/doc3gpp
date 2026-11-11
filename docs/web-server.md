@@ -8,11 +8,14 @@ skip rules, and pools live in [processes.md](processes.md).
 ## Install and run
 
 ```bash
-pip install "doc3gpp[cli,web,extract]"
+uv tool install 'doc3gpp[cli,web,extract]'
 doc3gpp config init --target user
 doc3gpp db init --scope all
 doc3gpp server start
 ```
+
+If the CLI is already installed, reinstall it with the full set of desired
+extras, for example `uv tool install --reinstall 'doc3gpp[cli,web,extract]'`.
 
 The default is `http://127.0.0.1:13999/`. Server commands are enabled by default;
 `[server] enabled = false` disables them. Add `[semantic]` and configure an

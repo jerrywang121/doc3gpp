@@ -11,12 +11,13 @@ tool registry and reuse services and JSON payload builders from HTTP/CLI adapter
 For a fresh installation, install both the CLI and web/MCP dependencies:
 
 ```bash
-pip install "doc3gpp[cli,web]"
+uv tool install 'doc3gpp[cli,web]'
 doc3gpp db init --scope all
 ```
 
-If the CLI is already installed, `pip install "doc3gpp[web]"` adds the web/MCP
-dependencies. Both `server.enabled` and `mcp.enabled` default to `true`.
+If the CLI is already installed, reinstall it with the full set of desired
+extras, for example `uv tool install --reinstall 'doc3gpp[cli,web]'`. Both
+`server.enabled` and `mcp.enabled` default to `true`.
 
 ### Local stdio client
 

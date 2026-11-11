@@ -73,42 +73,10 @@ TTCN test suites release normally are updated two to three weeks after a quarter
 RAN5 TTCN Workshops meeting discuss TTCN test models, typically four to six times per year.
 Search email meetings and workshops separately from regular RAN5 meetings.
 
-## Intall and Setup MCP
+## Install and Setup MCP
 
-Perform below operations only if the doc3gpp mcp tool is not available.
-
-For a fresh setup with [uv](https://docs.astral.sh/uv/), install the CLI with
-all runtime extras and initialize the databases:
-
-```bash
-uv tool install 'doc3gpp[all]'
-doc3gpp db init --scope all
-```
-
-Configure a local stdio MCP client to launch the server as a foreground subprocess:
-
-```bash
-doc3gpp mcp
-```
-
-For a client using `mcpServers` JSON, use:
-
-```json
-{
-  "mcpServers": {
-    "doc3gpp": {
-      "command": "doc3gpp",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-Run initialization and the MCP client with the same environment and working
-directory so they resolve the same configuration. The databases start without
-synced 3GPP data; use the sync workflows below to populate them.
-
-Alternatively, run `doc3gpp server start --no-open` and connect an HTTP MCP client to `http://127.0.0.1:13999/mcp/` by default.
+For instructions on installing the doc3gpp and configuring MCP, see the
+[Agent Skill and MCP section in the doc3gpp GitHub README](https://github.com/jerrywang121/doc3gpp#agent-skill-and-mcp).
 
 ## Run jobs
 

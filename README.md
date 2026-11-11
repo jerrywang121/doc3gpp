@@ -55,20 +55,20 @@ Run `doc3gpp mcp` for stdio, or `doc3gpp server start` for the UI at
 There is no built-in authentication: keep the HTTP server on a trusted local
 machine. See [MCP connections](docs/mcp.md#connect) for client configuration.
 
-## Agent Skill
+## Agent Skill and MCP
 
-With Node.js (`npx`) and [uv](https://docs.astral.sh/uv/) installed, install the
-CLI and [doc3gpp skill](src/doc3gpp/data/skills/doc3gpp/SKILL.md), then initialize
-the databases:
+Install the [doc3gpp skill](src/doc3gpp/data/skills/doc3gpp/SKILL.md) for
+supported agents in the current project with Node.js (`npx`):
 
 ```bash
-uv tool install 'doc3gpp[all]'
 npx --yes skills add https://github.com/jerrywang121/doc3gpp/tree/main/src/doc3gpp/data/skills/doc3gpp --skill doc3gpp -y
-doc3gpp db init --scope all
 ```
 
-The skill is installed in the current project for supported agents. Add this
-stdio configuration to your MCP client (the exact format depends on the client):
+Configure your MCP client to use either local stdio or HTTP. These examples use
+`mcpServers` JSON; client configuration keys and file locations vary, so adapt
+them to your client.
+
+### stdio
 
 ```json
 {
@@ -81,10 +81,24 @@ stdio configuration to your MCP client (the exact format depends on the client):
 }
 ```
 
-Use the same environment and working directory for initialization and the MCP
-client. The databases start without synced 3GPP data; use the skill's sync
-workflows to populate them. For database locations and advanced settings, see
-[configuration](docs/config.md).
+### HTTP (Streamable HTTP)
+
+Start the server with `doc3gpp server start --no-open`, then configure an
+HTTP-capable MCP client to connect to the default endpoint:
+
+```json
+{
+  "mcpServers": {
+    "doc3gpp": {
+      "type": "http",
+      "url": "http://127.0.0.1:13999/mcp/"
+    }
+  }
+}
+```
+
+For transport details and security requirements, see
+[MCP connections](docs/mcp.md#connect).
 
 ## Documentation
 

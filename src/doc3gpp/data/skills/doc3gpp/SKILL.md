@@ -12,7 +12,11 @@ Do not treat a queued job as completed work.
 
 ## Legacy Office dependencies
 
-On the machine running the doc3gpp server, install `doc3gpp[extract]` for Word and PowerPoint extraction. Parsing legacy `.doc` also needs LibreOffice Writer; parsing `.ppt` needs LibreOffice Impress. Modern `.docx` and `.pptx` do not need LibreOffice.
+On the machine running the doc3gpp server, install the CLI with the extraction
+extra (for example, `uv tool install --reinstall 'doc3gpp[cli,extract]'`; include
+any other extras you want to retain). This enables Word and PowerPoint
+extraction. Parsing legacy `.doc` also needs LibreOffice Writer; parsing `.ppt`
+needs LibreOffice Impress. Modern `.docx` and `.pptx` do not need LibreOffice.
 
 - **Linux (Debian/Ubuntu):** run `sudo apt update` and `sudo apt install libreoffice-writer libreoffice-impress`; verify with `command -v soffice` or `command -v libreoffice`. Other distributions may use different package names.
 - **Windows:** install Writer and Impress using the [official LibreOffice installer](https://www.libreoffice.org/download/download-libreoffice/). Add its `program` directory (normally `C:\Program Files\LibreOffice\program`) to the user or system `Path`, open a new PowerShell window, and verify with `Get-Command soffice.exe`. For the current session only, use `$env:Path += ";C:\Program Files\LibreOffice\program"` before starting doc3gpp. Adjust the path for the actual installation and restart an already-running server to inherit it.
@@ -71,16 +75,18 @@ Search email meetings and workshops separately from regular RAN5 meetings.
 
 ## Connect and run jobs
 
-For a fresh setup with [uv](https://docs.astral.sh/uv/), initialize all databases:
+For a fresh setup with [uv](https://docs.astral.sh/uv/), install the CLI with
+all runtime extras and initialize the databases:
 
 ```bash
-uvx --from 'doc3gpp[all]' doc3gpp db init --scope all
+uv tool install 'doc3gpp[all]'
+doc3gpp db init --scope all
 ```
 
 Configure a local stdio MCP client to launch the server as a foreground subprocess:
 
 ```bash
-uvx --from 'doc3gpp[all]' doc3gpp mcp
+doc3gpp mcp
 ```
 
 For a client using `mcpServers` JSON, use:
@@ -89,8 +95,8 @@ For a client using `mcpServers` JSON, use:
 {
   "mcpServers": {
     "doc3gpp": {
-      "command": "uvx",
-      "args": ["--from", "doc3gpp[all]", "doc3gpp", "mcp"]
+      "command": "doc3gpp",
+      "args": ["mcp"]
     }
   }
 }
@@ -100,7 +106,7 @@ Run initialization and the MCP client with the same environment and working
 directory so they resolve the same configuration. The databases start without
 synced 3GPP data; use the sync workflows below to populate them.
 
-Alternatively, run `uvx --from 'doc3gpp[all]' doc3gpp server start --no-open` and connect an HTTP MCP client to `http://127.0.0.1:13999/mcp/` by default.
+Alternatively, run `doc3gpp server start --no-open` and connect an HTTP MCP client to `http://127.0.0.1:13999/mcp/` by default.
 
 The job queue is single-process: concurrent HTTP or stdio workers sharing a database can interfere with job ownership and recovery.
 

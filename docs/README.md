@@ -19,9 +19,9 @@ than repeat its full reference.
 
 ## Python SDK
 
-Install `doc3gpp` without extras for metadata services. Configure the database
-as described in [configuration](config.md), then compose a service through its
-factory:
+Add `doc3gpp` without extras to a Python project (for example, with
+`uv add doc3gpp`) for metadata services. Configure the database as described in
+[configuration](config.md), then compose a service through its factory:
 
 ```python
 from doc3gpp.services.factory import build_meeting_service

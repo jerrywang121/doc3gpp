@@ -12,7 +12,8 @@ in the [code map](code-map.md), and boundaries in [architecture](architecture.md
   Plain `python -m pytest` therefore imports the local source and runs offline.
 - `./scripts/test_sqlite.sh` adds coverage and uses `-n auto` when xdist is
   available, sequential otherwise. Pass `-n 0` to force sequential execution.
-- Install `.[dev,extract,semantic]` to cover optional extraction/vector paths.
+- Run `uv sync --extra dev --extra extract --extra semantic` to cover optional
+  extraction/vector paths.
   A pytest marker is not a dependency installer; inspect skip reasons.
 - Run live tests explicitly with `python -m pytest -m online -rs`. Upstream
   availability/layout can change; do not make deterministic tests depend on it.

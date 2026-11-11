@@ -73,7 +73,9 @@ TTCN test suites release normally are updated two to three weeks after a quarter
 RAN5 TTCN Workshops meeting discuss TTCN test models, typically four to six times per year.
 Search email meetings and workshops separately from regular RAN5 meetings.
 
-## Connect and run jobs
+## Intall and Setup MCP
+
+Perform below operations only if the doc3gpp mcp tool is not available.
 
 For a fresh setup with [uv](https://docs.astral.sh/uv/), install the CLI with
 all runtime extras and initialize the databases:
@@ -107,6 +109,8 @@ directory so they resolve the same configuration. The databases start without
 synced 3GPP data; use the sync workflows below to populate them.
 
 Alternatively, run `doc3gpp server start --no-open` and connect an HTTP MCP client to `http://127.0.0.1:13999/mcp/` by default.
+
+## Run jobs
 
 The job queue is single-process: concurrent HTTP or stdio workers sharing a database can interfere with job ownership and recovery.
 

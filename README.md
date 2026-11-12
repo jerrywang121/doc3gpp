@@ -1,7 +1,8 @@
 # doc3gpp
 
 A Python library and CLI for collecting and searching 3GPP meeting calendars,
-TDocs, work items, specifications, and RAN5 testcase status snapshots.
+TDocs, work items, specifications, RAN5 testcase status snapshots, and public
+ETSI LISTSERV email archives.
 Store source metadata in SQL, extract Word and presentation content, and use
 the same services through the CLI, web UI, HTTP API, or MCP tools.
 

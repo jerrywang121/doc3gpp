@@ -1,6 +1,6 @@
 ---
 name: doc3gpp
-description: Use when querying or refreshing 3GPP meetings, TDocs, specifications, specification documents, or RAN5 testcases through the doc3gpp MCP server.
+description: Use when querying or refreshing 3GPP meetings, TDocs, specifications, specification documents, RAN5 testcases, or public ETSI LISTSERV archives through the doc3gpp MCP server.
 ---
 
 # Using doc3gpp MCP
@@ -89,7 +89,8 @@ Read tools return one text item that contains JSON.
 The `get_tdoc_content` tool instead returns the content itself, and `get_skill({})` returns this complete skill as raw Markdown including its frontmatter.
 Parse JSON before using IDs, versions, or links.
 
-Sync, parse, and index tools return `{job_id, status, message, links}`.
+Most sync, parse, and index tools return `{job_id, status, message, links}`;
+LISTSERV enqueue tools instead return `{job_id, status, url}`.
 Poll `get_job({"job_id":"..."})` until `status` is `succeeded`, `failed`, or `cancelled`.
 Inspect `result`, `error`, and `log_tail`.
 A `queued` or `running` job does not prove that rows are available.
@@ -223,6 +224,57 @@ Search returns chunks, not necessarily a complete source file.
 
 There is no separate testcase parse tool.
 Each result contains nested `statuses` entries with `path`, `gcf_ptcrb`, and `ttcn_status`.
+
+### ETSI LISTSERV archives
+
+LISTSERV contains public email archive messages, separate from meeting TDocs.
+Supply an exact public list ID for sync and parse; `RAN-WG1` below is only an
+example, not an allowlist. `listserv_list({})` returns IDs already represented
+by stored messages, not a catalogue of all available lists.
+
+1. Use `listserv_search` to inspect stored listings, or `listserv_list` to see
+   which list IDs are already stored.
+2. If listings are missing or stale, enqueue `listserv_sync` with an exact
+   `list_id`. Sync fetches listing metadata, not message bodies. Without `date`,
+   it covers the preceding calendar year through today, inclusive.
+3. Poll `get_job` to a terminal status and inspect the result before continuing.
+4. Enqueue `listserv_parse` for the same list to fetch details of stored
+   messages; it does not sync. Poll the job again. Use `force: true` to reparse
+   previously parsed messages, or to make sync revisit covered pages.
+5. Search again, then pass the exact returned `url` to `listserv_show` for the
+   full stored body and attachment metadata.
+
+```text
+listserv_sync         {"list_id":"RAN-WG1","date":[">= 2026-10-01","<= 2026-10-31"]}
+get_job               {"job_id":"<sync job_id>"}  # poll until terminal
+listserv_parse        {"list_id":"RAN-WG1","date":[">= 2026-10-01","<= 2026-10-31"]}
+get_job               {"job_id":"<parse job_id>"} # poll until terminal
+listserv_search       {"list_id":"RAN-WG1","tdocs":"R1-2610793","limit":10}
+listserv_show         {"url":"<exact url from listserv_search>"}
+listserv_index_status {}
+```
+
+`date` is an array of intersecting comparisons (`=`, `!=`, `<`, `<=`, `>`,
+`>=`) against the displayed calendar date. Search also supports `sender`,
+`subject`, `tdocs`, `text`, `semantic`, `limit` (default 20, 0–150), and
+`offset`; its list ID and other metadata filters support rich LIKE patterns.
+`text` selects FTS5, `semantic` vector search, both hybrid search, and neither
+filter-only search. Index availability errors are not empty results.
+
+All list, search, show, and index-status reads use stored data; they never fetch
+or parse messages. Search returns at most a 200-character `content_preview`;
+`listserv_show` returns the complete stored body, which defaults to a 10,000
+Unicode-character cap. `content_truncated` reports the original-to-storage cut;
+`preview_truncated` reports the separate storage-to-preview cut. Both are null
+for unparsed messages. Attachments are metadata only; their bytes are not
+downloaded. Only public ETSI LISTSERV pages are supported.
+
+Sync/parse job results separate source `failed`/`failures` from derived
+`index_failed`/`index_failures`; either can fail the job, but index failures do
+not undo stored source data. Check `listserv_index_status({})` and, when needed,
+enqueue `listserv_index_rebuild({"rebuild":true})` for FTS5,
+`{"rebuild_embeddings":true}` for vectors, or `{"rebuild_all":true}` for both.
+Poll the rebuild job. Rebuilding uses stored data, not the upstream archive.
 
 ### Filters, pagination, and search indexes
 

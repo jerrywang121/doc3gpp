@@ -474,19 +474,24 @@ messages = build_listserv_service()
 record = messages.show(
     "https://list.etsi.org/scripts/wa.exe?A2=RAN-WG1;2026-10-15;EXAMPLE"
 )
-hits = build_listserv_search_service().search(
-    text="handover",
-    filters=ListservFilters(
-        list_id="RAN-WG1",
-        dates=parse_date_set([">= 2026-10-01", "<= 2026-10-31"]),
-        limit=10,
-    ),
-)
+search_service = build_listserv_search_service()
+try:
+    hits = search_service.search(
+        text="handover",
+        filters=ListservFilters(
+            list_id="RAN-WG1",
+            dates=parse_date_set([">= 2026-10-01", "<= 2026-10-31"]),
+            limit=10,
+        ),
+    )
+finally:
+    search_service.close()
 ```
 
 `RAN-WG1` and the URL are illustrative inputs, not an allowlist. Sync and parse
 builders own their source and should be closed when finished; list/show/search
-builders are SQL-backed reads.
+builders are SQL-backed reads. Close the search service when finished to release
+any lazily created semantic service it owns.
 
 ### Separate parse and bounded message detail
 
@@ -524,7 +529,8 @@ and returns the full **stored** body only; it cannot recover truncated text.
 Search modes match the shared facades: `text` uses FTS5, `semantic` uses vector
 search, both use hybrid RRF, and neither uses source-SQL filters only. The
 filters for list ID, sender, subject, TDocs, and displayed dates apply in each
-mode. Metadata and extracted TDocs are searchable before parsing. Index input
+mode. Listing metadata and TDoc IDs extracted from subjects are searchable
+before parsing; body and attachment IDs require parsing. Index input
 includes stored message metadata, attachment names, IDs, and the bounded stored
 body, but strips message/attachment URL strings from both FTS and embeddings
 (URLs remain in output metadata). A TDoc ID extracted from an attachment URL is

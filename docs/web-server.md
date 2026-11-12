@@ -227,7 +227,7 @@ SDK payload serializers; they do not sync, parse, or fetch ETSI content.
 | Method and path | Inputs / response |
 | --- | --- |
 | `GET /api/listserv/lists` | `{"list_ids": [...]}`; distinct IDs found in stored message rows, not a static catalogue |
-| `GET /api/listserv/search` | Query: repeatable `date`, `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit` (default 20, 0–150), `offset` (default 0); response is a bare array of search payloads |
+| `GET /api/listserv/search` | Query: repeatable `date`; `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit` (default 20, 0–150), `offset` (default 0); response is a bare array of search payloads |
 | `GET /api/listserv/show?url=...` | Required exact stored message detail URL; response is the full stored-record payload |
 | `GET /api/listserv/index/status` | Independent FTS/vector `IndexStatus` JSON; no upstream request |
 | `POST /api/listserv/sync` | JSON `{"list_id":"RAN-WG1","dates":[">= 2026-10-01"],"force":false}` |

@@ -110,6 +110,7 @@ The authoritative registration is
 | Specifications | `list_specs`, `get_spec` |
 | Spec documents | `get_spec_toc`, `get_spec_doc_content`, `search_spec_docs`, `get_spec_doc_index` |
 | Testcases | `list_testcases`, `get_testcase` |
+| LISTSERV archives | `listserv_list`, `listserv_search`, `listserv_show`, `listserv_index_status` |
 | Jobs | `get_job`, `list_jobs` |
 | Schema | `get_tsg_schema`, `get_meeting_schema`, `get_tdoc_schema`, `get_wi_schema`, `get_spec_schema`, `get_testcase_schema`, `get_spec_doc_schema` |
 
@@ -118,11 +119,13 @@ The authoritative registration is
 | Sync | `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`, `sync_all_tdocs`, `sync_specs`, `sync_testcases` |
 | Extract | `parse_tdocs`, `parse_tdoc_url`, `parse_spec_docs` |
 | Maintain indexes | `index_tdocs`, `index_spec_docs` |
+| LISTSERV archives | `listserv_sync`, `listserv_parse`, `listserv_index_rebuild` |
 | Purge / cancel | `purge_cache`, `cancel_job` |
 
 Do not infer a tool from an HTTP route: for example HTTP exposes WI sync, but
 there is currently no `sync_wis` MCP tool. Tool names are intentionally not all
 plural (`search_tdoc` is singular).
+For LISTSERV-specific inputs and job results, see [LISTSERV archives](#listserv-archives).
 
 ## Recommended agent workflow
 
@@ -137,6 +140,10 @@ plural (`search_tdoc` is singular).
    files with converted Markdown.
 5. If content is absent or incomplete, explicitly enqueue parsing and monitor
    the job. Re-read after successful completion.
+
+For LISTSERV, search stored messages first and use their exact URLs for detail
+reads. Sync listings and parse message bodies as separate jobs when needed;
+there is no LISTSERV schema tool.
 
 Content reads are snapshots: they do not sync, download, or parse. The CLI's
 auto-sync and ID-based raw-extraction convenience do not apply to MCP reads.

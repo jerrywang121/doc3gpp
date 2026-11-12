@@ -173,6 +173,77 @@ def test_parse_message_body_html_removes_quotes_retains_uncertain_prose_and_sani
     assert ids == ("R1-2610793", "RP-2601234", "R5S260009")
 
 
+@pytest.mark.parametrize(
+    "quoted_headers",
+    [
+        (
+            '<p><b>From:</b>Kuba &lt;<a href="/scripts/wa.exe?LOGON=abc">'
+            "[log in to unmask]</a>&gt;</p>"
+            '<p><b>To:</b><a href="/scripts/wa.exe?LOGON=abc">'
+            "[log in to unmask]</a></p>"
+            "<p><b>Date:</b>2026年11月09日 19:47</p>"
+            "<p><b>Subject:</b><b>Old R1-111111</b></p>"
+        ),
+        (
+            '<p><b>From:</b> Pradeep &lt;<a href="/scripts/wa.exe?LOGON=abc">'
+            "[log in to unmask]</a>&gt;<br>"
+            "<b>Sent:</b> Thursday, October 15, 2026 4:01 PM<br>"
+            '<b>To:</b> <a href="/scripts/wa.exe?LOGON=abc">'
+            "[log in to unmask]</a><br>"
+            "<b>Subject:</b> Old R1-111111</p>"
+        ),
+    ],
+    ids=["separate-paragraphs-date", "line-breaks-sent"],
+)
+def test_parse_message_body_removes_bold_html_reply_headers_and_history(
+    quoted_headers: str,
+) -> None:
+    from doc3gpp.parsers.listserv_detail import extract_tdocs, parse_message_body
+
+    html = "<p>Current message R1-2610793.</p>" + quoted_headers + "<p>Old message R2-222222.</p>"
+
+    markdown = parse_message_body(html, is_html=True)
+
+    assert markdown == "Current message R1-2610793."
+    assert extract_tdocs(markdown) == ("R1-2610793",)
+
+
+def test_parse_message_body_removes_bold_plain_reply_headers_with_blank_lines() -> None:
+    from doc3gpp.parsers.listserv_detail import parse_message_body
+
+    body = (
+        "Current discussion.\n\n"
+        "**From:** Author\n\n"
+        "**To:** List\n\n"
+        "**Date:** 2026年11月09日 19:47\n\n"
+        "**Subject:****Old topic**\n\n"
+        "Old discussion."
+    )
+
+    assert parse_message_body(body, is_html=False) == "Current discussion."
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Current message.\n\n**From:** Alice\n\nMore current prose.",
+        "Current message.\n\n**From:** Alice\n**Date:** Monday\nMore current prose.",
+        "Current message.\n\n**From:**\n**Date:** Monday\n**To:** Team\nMore prose.",
+        (
+            "Current message.\n\n**From:** Alice\n\nMore current prose.\n\n"
+            "**Date:** Monday\n\n**To:** Team\n\nFinal paragraph."
+        ),
+    ],
+    ids=["single-header", "missing-recipient-or-subject", "empty-from", "separated-headers"],
+)
+def test_parse_message_body_preserves_incomplete_or_separated_bold_headers(
+    body: str,
+) -> None:
+    from doc3gpp.parsers.listserv_detail import parse_message_body
+
+    assert parse_message_body(body, is_html=False) == body
+
+
 def test_parse_message_body_plain_removes_reply_and_forward_blocks_conservatively(
     body_txt: str,
 ) -> None:

@@ -88,6 +88,8 @@ For LISTSERV changes, preserve public-host-only transport, actual-page URL
 coverage, the separate sync/parse boundary, SQL-only read paths, independent
 source/index state, and shared HTTP/MCP/CLI payload serializers. Keep ORM/schema
 reporting aligned and never add attachment downloads or implicit read-time work.
+Reply-boundary detection is conservative and best-effort; parser improvements
+require a forced reparse of stored messages.
 Web LISTSERV facades and worker-built sync/parse services borrow the app's lazy
 shared embedder. Close per-job source/index resources on their worker thread,
 then app facades after jobs drain and before the shared embedder. CLI and

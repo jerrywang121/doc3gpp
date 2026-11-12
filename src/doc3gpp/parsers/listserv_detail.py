@@ -76,6 +76,11 @@ _HEADER_KEY_RE = re.compile(
     r"^\s*(?:from|sent|date|to|cc|subject)\s*:\s*\S+",
     re.IGNORECASE,
 )
+_FORMATTED_HEADER_KEY_RE = re.compile(
+    r"^\s*(?:\*\*(from|sent|date|to|cc|subject)\s*:\*\*"
+    r"|(from|sent|date|to|cc|subject)\s*:)\s*\S+",
+    re.IGNORECASE,
+)
 _RAW_HTML_TAG_RE = re.compile(
     r"<!--[\s\S]*?-->|</?[A-Za-z!][A-Za-z0-9:_-]*(?:\s[^<>]*)?>",
 )
@@ -572,15 +577,36 @@ def _render_blocks(container: Tag) -> list[str]:
 
 def _is_plain_header_block_at(lines: list[str], idx: int) -> bool:
     line = lines[idx].strip()
-    if not line.lower().startswith("from:"):
-        return False
-    window = [ln.strip() for ln in lines[idx : idx + 7] if ln.strip()]
-    if len(window) < 3:
-        return False
-    matches = sum(1 for ln in window[:6] if _HEADER_KEY_RE.match(ln))
-    has_date = any(ln.lower().startswith(("sent:", "date:")) for ln in window[:5])
-    has_to_or_subj = any(ln.lower().startswith(("to:", "subject:")) for ln in window[:6])
-    return matches >= 3 and has_date and has_to_or_subj
+    if line.lower().startswith("from:"):
+        window = [ln.strip() for ln in lines[idx : idx + 7] if ln.strip()]
+        matches = sum(1 for ln in window[:6] if _HEADER_KEY_RE.match(ln))
+        has_date = any(ln.lower().startswith(("sent:", "date:")) for ln in window[:5])
+        has_to_or_subj = any(ln.lower().startswith(("to:", "subject:")) for ln in window[:6])
+        if matches >= 3 and has_date and has_to_or_subj:
+            return True
+
+    # HTML-rendered headers often have bold labels and paragraph breaks.
+    # Stop at intervening prose to avoid joining unrelated header-like lines.
+    headers: list[str] = []
+    for header_line in lines[idx : idx + 12]:
+        if not header_line.strip():
+            continue
+        match = _FORMATTED_HEADER_KEY_RE.match(header_line)
+        if match is None:
+            break
+        key = (match.group(1) or match.group(2)).lower()
+        if not headers and key != "from":
+            return False
+        headers.append(key)
+        if len(headers) == 6:
+            break
+
+    return (
+        bool(headers)
+        and headers[0] == "from"
+        and bool({"sent", "date"} & set(headers))
+        and bool({"to", "subject"} & set(headers))
+    )
 
 
 def _is_quote_prefix(stripped_line: str) -> bool:

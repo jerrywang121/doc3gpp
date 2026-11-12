@@ -503,11 +503,13 @@ never fetched. `multipart/related` and text alternatives are body
 representations, not downloadable attachments.
 
 The parser removes recognizable quoted-reply/forward sections conservatively,
-using structural HTML quote boundaries and plain-text delimiters. If a boundary
-is uncertain it favors retaining the current body rather than cutting arbitrary
-prose. Email quoting is not standardized, so quote removal is best-effort, not a
-guarantee for every message format. Unsafe embedded HTML is excluded from stored
-Markdown.
+using structural HTML quote boundaries, plain-text delimiters, and groups of
+reply headers, including bold labels rendered from HTML and headers separated by
+blank lines. If a boundary is uncertain it favors retaining the current body
+rather than cutting arbitrary prose. Email quoting is not standardized, so quote
+removal is best-effort, not a guarantee for every message format. Unsafe
+embedded HTML is excluded from stored Markdown. Parser improvements apply on
+subsequent parses; force-reparse already stored messages to update them.
 
 Before applying `[listserv].max_content_chars` (10,000 Unicode characters by
 default), parsing extracts unique case-insensitive TDoc IDs from the current

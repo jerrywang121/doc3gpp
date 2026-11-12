@@ -44,6 +44,11 @@ from doc3gpp.web.workers.listserv_jobs import validate_batch_request
 router = APIRouter(prefix="/api/listserv", tags=["listserv"])
 
 
+def _optional_search_filter(value: str | None) -> str | None:
+    """Treat blank HTTP query values as absent, preserving rich-filter syntax."""
+    return value if value and value.strip() else None
+
+
 def enqueue_listserv_batch(
     job_repo: JobRepository,
     kind: JobKind,
@@ -161,13 +166,14 @@ def search_listserv(
     offset: int = Query(default=0),
     service: ListservSearchService = Depends(get_listserv_search_service),
 ) -> list[dict[str, Any]]:
+    date_values = [value for value in (date or []) if value.strip()]
     try:
         filters = ListservFilters(
-            list_id=list_id,
-            sender=sender,
-            subject=subject,
-            tdocs=tdocs,
-            dates=parse_date_set(date) if date else None,
+            list_id=_optional_search_filter(list_id),
+            sender=_optional_search_filter(sender),
+            subject=_optional_search_filter(subject),
+            tdocs=_optional_search_filter(tdocs),
+            dates=parse_date_set(date_values) if date_values else None,
             limit=limit,
             offset=offset,
         )
@@ -249,15 +255,18 @@ def listserv_page(
     ]
     page_limit = max(1, min(limit, 150))
     page_offset = max(offset, 0)
-    normalized_list_id = list_id if list_id and list_id.strip() else None
+    normalized_list_id = _optional_search_filter(list_id)
+    normalized_sender = _optional_search_filter(sender)
+    normalized_subject = _optional_search_filter(subject)
+    normalized_tdocs = _optional_search_filter(tdocs)
     list_ids = list_listserv_ids(service)["list_ids"]
     index_status = listserv_index_status(index_service)
     hits = search_listserv(
         date=date_values or None,
         list_id=normalized_list_id,
-        sender=sender,
-        subject=subject,
-        tdocs=tdocs,
+        sender=normalized_sender,
+        subject=normalized_subject,
+        tdocs=normalized_tdocs,
         text=text,
         semantic=semantic,
         limit=page_limit,
@@ -278,9 +287,9 @@ def listserv_page(
             "hits": hits,
             "filters": {
                 "list_id": normalized_list_id,
-                "sender": sender,
-                "subject": subject,
-                "tdocs": tdocs,
+                "sender": normalized_sender,
+                "subject": normalized_subject,
+                "tdocs": normalized_tdocs,
             },
             "date_filters": date_values,
             "text": text,

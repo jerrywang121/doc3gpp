@@ -272,6 +272,47 @@ def test_empty_listserv_store_allows_entering_sync_and_parse_list_ids(
         assert "required" in form
 
 
+@pytest.mark.parametrize("blank_value", ["", "   "], ids=["empty", "whitespace"])
+@pytest.mark.parametrize(
+    ("endpoint", "json_response"),
+    [("/listserv", False), ("/api/listserv/search", True)],
+    ids=["page", "api"],
+)
+@pytest.mark.parametrize(
+    ("search_field", "search_value"),
+    [("text", "Topic"), ("subject", "%alert(1)%"), ("tdocs", "R1-2610793")],
+    ids=["text", "subject", "tdocs"],
+)
+def test_listserv_http_search_ignores_blank_filter_inputs(
+    client: TestClient,
+    blank_value: str,
+    endpoint: str,
+    json_response: bool,
+    search_field: str,
+    search_value: str,
+) -> None:
+    params = {
+        "list_id": blank_value,
+        "sender": blank_value,
+        "subject": blank_value,
+        "tdocs": blank_value,
+        "date": blank_value,
+        "text": blank_value,
+        "semantic": blank_value,
+        "limit": "20",
+    }
+    params[search_field] = search_value
+
+    response = client.get(endpoint, params=params)
+
+    assert response.status_code == 200, response.text
+    if json_response:
+        assert [item["url"] for item in response.json()] == [PARSED_URL]
+    else:
+        assert "1 result" in response.text
+        assert "Topic" in response.text
+
+
 def test_listserv_search_form_uses_rich_list_id_input_and_stored_suggestions(
     client: TestClient,
 ) -> None:

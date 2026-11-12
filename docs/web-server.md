@@ -280,10 +280,12 @@ curl -X POST 'http://127.0.0.1:13999/api/listserv/sync' \
 Search, status, and detail routes are SQL-only. Semantic/hybrid requests can
 return an actionable unavailable error if embeddings/vector support is not
 configured; filter-only and FTS search do not require vector support. The
-browser UI is at `/listserv`; its list-ID search field accepts the same rich
-filter syntax as the search API (`%`/`_` LIKE patterns, leading `!` negation,
-`null`, and `not-null`). Stored list IDs appear as suggestions, and an empty
-field searches all lists. Sync and parse forms still require one exact list ID.
+browser UI is at `/listserv`; empty or whitespace-only optional search fields
+are ignored in both HTTP search routes. Its list-ID search field accepts the
+same rich filter syntax as the search API (`%`/`_` LIKE patterns, leading `!`
+negation, `null`, and `not-null`). Stored list IDs appear as suggestions, and
+an empty field searches all lists. Sync and parse forms still require one exact
+list ID.
 `/listserv/show` takes the exact `url` query value. Its forms reuse these
 routes/jobs, and opening either page never syncs or parses. HTTP server
 authentication and job-queue deployment limitations remain as described above.

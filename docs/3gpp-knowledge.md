@@ -689,3 +689,27 @@ concepts, not extra upstream spreadsheet columns.
 For current field definitions use `<resource> schema`; for source symbols use
 [the code map](code-map.md). This guide deliberately does not repeat either
 complete inventory.
+
+## ETSI LISTSERV archives
+
+The archive importer reads public pages from the HTTPS LISTSERV host
+`list.etsi.org`. It accepts an exact list ID without a hardcoded vocabulary;
+IDs shown in examples (for example `RAN-WG1`) are illustrative, not an
+allowlist. The application's `listserv list` view reports only list IDs
+already represented by locally stored messages, not every upstream list.
+
+Archive week/month labels identify listing pages, not necessarily every
+message's displayed date. A displayed week may have multiple actual page URLs,
+and a listing can contain a message dated outside its label. Stored coverage is
+therefore keyed by page URL and date predicate. For month-only pages, a message's
+week is derived from its displayed calendar day. When available, the source
+datetime and offset are retained; dates without a time carry date precision,
+and an unknown time zone is not invented.
+
+Message subjects and bodies can contain 3GPP TDoc IDs such as `R1-2610793`,
+`RP-2601234`, or `R5s260009`. These are examples of recognized identifier
+shapes, not a list of supported mailing lists. The parser extracts IDs from
+the current body, subject, and attachment metadata before body truncation;
+recognizable quoted prior-message content is excluded. See the
+[LISTSERV process guide](processes.md#listserv-archive-flow) for parsing,
+search indexing, date filters, and source constraints.

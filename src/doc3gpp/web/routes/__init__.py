@@ -14,6 +14,12 @@ from fastapi import APIRouter
 
 from doc3gpp.web.routes.jobs import router as jobs_router
 from doc3gpp.web.routes.landing import router as landing_router
+from doc3gpp.web.routes.listserv import (
+    router as listserv_router,
+)
+from doc3gpp.web.routes.listserv import (
+    ui_router as listserv_ui_router,
+)
 from doc3gpp.web.routes.meetings import router as meetings_router
 from doc3gpp.web.routes.search import router as search_router
 from doc3gpp.web.routes.spec_docs import router as spec_docs_router
@@ -39,6 +45,8 @@ def all_routers() -> list[APIRouter]:
         testcases_router,
         jobs_router,
         sync_router,
+        listserv_router,
+        listserv_ui_router,
     ]
 
 

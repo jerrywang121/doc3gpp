@@ -82,6 +82,9 @@ TTCN_TESTCASE_STATUSES: tuple[str, ...] = (
 # Spec types from the DynaReport detail page (see ``parsers/spec_parser.py``).
 SPEC_TYPES: tuple[str, ...] = ("TS", "TR")
 
+# Date precision values for ETSI LISTSERV message listings (see ``models/listserv.py``).
+LISTSERV_DATE_PRECISIONS: tuple[str, ...] = ("datetime", "date")
+
 
 @dataclass(slots=True, frozen=True)
 class FieldInfo:
@@ -435,6 +438,47 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("parsed_at", "datetime", True, "UTC parse timestamp, else null."),
                 FieldInfo("testcase_count", "int", False, "Number of testcase headers parsed from the file."),
                 FieldInfo("status_count", "int", False, "Number of status rows parsed from the file."),
+            ),
+        ),
+    ),
+    "listserv": (
+        TableSchema(
+            table="listserv_messages",
+            fields=(
+                FieldInfo("url", "str", False, "Canonical ETSI LISTSERV message detail URL; primary key."),
+                FieldInfo("list_id", "str", False, "Normalized uppercase mailing-list ID, e.g. 3GPP_TSG_RAN_WG1."),
+                FieldInfo("subject", "text", False, "Message subject line."),
+                FieldInfo("sender", "text", False, "Displayed sender string from the archive listing."),
+                FieldInfo("local_datetime", "datetime", False, "Displayed local message timestamp without timezone conversion."),
+                FieldInfo("local_date", "date", False, "Displayed local calendar date used for date filters."),
+                FieldInfo("tz_offset_seconds", "int", True, "Original timezone offset from UTC in seconds when upstream provides one, else null."),
+                FieldInfo("date_precision", "str", False, "Precision of the upstream listing timestamp.", LISTSERV_DATE_PRECISIONS),
+                FieldInfo("sort_timestamp", "datetime", False, "UTC-normalized (or naive wall-clock fallback) timestamp used for deterministic ordering."),
+                FieldInfo("week", "str", False, "Archive week label in YYYY-MM-Wn format."),
+                FieldInfo("subject_tdocs", "text", False, "Comma-joined uppercase 3GPP TDoc IDs extracted from the current subject."),
+                FieldInfo("source_revision", "int", False, "Internal monotonically increasing source revision used for FTS and vector index freshness."),
+            ),
+        ),
+        TableSchema(
+            table="listserv_details",
+            fields=(
+                FieldInfo("url", "str", False, "Canonical message detail URL; primary key and FK into listserv_messages.url with cascade delete."),
+                FieldInfo("attachments", "text", False, "JSON array of ordered named attachment objects ({name, url})."),
+                FieldInfo("tdocs", "text", False, "Comma-joined uppercase 3GPP TDoc IDs extracted from message body and attachments."),
+                FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the bounded message Markdown body."),
+                FieldInfo("content_truncated", "bool", False, "True when the current message body exceeded [listserv].max_content_chars and was truncated."),
+                FieldInfo("parser_version", "str", False, "Detail parser version string, e.g. 1.0.0."),
+                FieldInfo("parsed_at", "datetime", False, "UTC timestamp when the message detail was parsed."),
+            ),
+        ),
+        TableSchema(
+            table="listserv_archive_pages",
+            fields=(
+                FieldInfo("list_id", "str", False, "Normalized uppercase mailing-list ID; first half of the composite PK."),
+                FieldInfo("page_url", "str", False, "Canonical archive page URL; second half of the composite PK."),
+                FieldInfo("period", "str", False, "Archive period label (YYYY-MM-Wn or YYYY-MM)."),
+                FieldInfo("coverage", "text", False, "JSON array of normalized inclusive [start, end] date intervals covered for this page."),
+                FieldInfo("next_urls", "text", False, "JSON array of discovered pagination URLs for this archive page."),
             ),
         ),
     ),

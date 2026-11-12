@@ -743,3 +743,45 @@ def test_spec_doc_config_example_contains_dedicated_cache_dir() -> None:
     assert "cache_dir" in text
     assert "sections" in text
     assert "tables" in text
+
+
+def test_listserv_automatic_index_settings_default_on() -> None:
+    from doc3gpp.settings.schema import ListservSettings
+
+    settings = ListservSettings()
+    assert settings.auto_index_on_sync is True
+    assert settings.auto_index_on_parse is True
+    assert settings.auto_embed_on_sync is True
+    assert settings.auto_embed_on_parse is True
+
+
+def test_listserv_automatic_index_settings_accept_false() -> None:
+    from doc3gpp.settings.schema import ListservSettings
+
+    settings = ListservSettings(
+        auto_index_on_sync=False,
+        auto_index_on_parse=False,
+        auto_embed_on_sync=False,
+        auto_embed_on_parse=False,
+    )
+    assert settings.auto_index_on_sync is False
+    assert settings.auto_index_on_parse is False
+    assert settings.auto_embed_on_sync is False
+    assert settings.auto_embed_on_parse is False
+
+
+def test_packaged_template_loads_listserv_automatic_index_defaults() -> None:
+    import tomllib
+
+    from doc3gpp.settings.config_writer import load_default_template
+    from doc3gpp.settings.schema import ListservSettings
+
+    data = tomllib.loads(load_default_template())["listserv"]
+    for key in (
+        "auto_index_on_sync",
+        "auto_index_on_parse",
+        "auto_embed_on_sync",
+        "auto_embed_on_parse",
+    ):
+        assert data[key] is True
+    assert ListservSettings(**data) == ListservSettings()

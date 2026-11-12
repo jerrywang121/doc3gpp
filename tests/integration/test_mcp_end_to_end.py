@@ -104,6 +104,13 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "get_job",
         "cancel_job",
         "list_jobs",
+        "listserv_sync",
+        "listserv_parse",
+        "listserv_list",
+        "listserv_search",
+        "listserv_show",
+        "listserv_index_status",
+        "listserv_index_rebuild",
     }
     assert names == expected
     get_tdoc_tool = next(tool for tool in tools if tool.name == "get_tdoc")

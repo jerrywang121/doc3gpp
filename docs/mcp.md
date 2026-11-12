@@ -184,12 +184,73 @@ still wraps the returned string in a tool result; compare the text payload,
 not the entire protocol envelope. `get_skill`, rendered HTML/Markdown, and
 enqueue messages are distinct contracts, not generic JSON-parity promises.
 
+### LISTSERV archives
+
+The shared registry adds these LISTSERV tools to both stdio and HTTP MCP:
+
+| Tool | Inputs / behavior |
+| --- | --- |
+| `listserv_sync` | Required exact `list_id`; optional repeatable `date` string array and `force`; enqueues sync |
+| `listserv_parse` | Required exact `list_id`; optional repeatable `date` string array and `force`; parses stored messages |
+| `listserv_list` | No arguments; returns `{"list_ids":[...]}` for IDs in stored rows |
+| `listserv_search` | Optional `date`, `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit`, `offset`; returns search payload array |
+| `listserv_show` | Required exact stored detail `url`; returns full stored-record payload |
+| `listserv_index_status` | No arguments; returns FTS/vector status |
+| `listserv_index_rebuild` | `rebuild`, `rebuild_embeddings`, `rebuild_all`, `batch`, `resume`, `stale_only`; enqueues index maintenance |
+
+The `RAN-WG1` example used in CLI/API documentation is not an ID whitelist.
+Date filters use the shared displayed-date comparison grammar. Read and status
+tools use SQL-backed services and do not fetch or parse upstream content.
+Search returns the same serialized fields as HTTP, including `url`, `tdocs`,
+`content_truncated`, and the separate `preview_truncated`; show returns the
+complete stored body only. MCP wraps each returned JSON string in its tool
+result, so compare the result text with HTTP JSON, not the protocol envelope.
+Semantic/vector availability errors remain explicit.
+
+Mutations reuse the existing queue. Enqueue results contain exactly `job_id`,
+`status`, and `url`; call `get_job(job_id)` to fetch later progress and result
+summaries. The job kinds are `listserv_sync`, `listserv_parse`, and
+`listserv_index`. Sync and parse summaries separate source `failed`/`failures`
+from derived `index_failed`/`index_failures`; index failures do not undo source
+commits. The separate `get_job` response retains its normal job fields and
+result summary.
+Running cancellation is cooperative. LISTSERV job services close their owned
+source/index resources on the worker thread and borrow the app's shared
+embedder. Stdio shutdown drains in-flight blocking handlers and their worker
+executor, then closes app LISTSERV facades before the shared embedder; it does
+not promise a hard deadline. See
+[LISTSERV lifecycle](processes.md#listserv-archive-flow) and
+[deployment constraints](known-constraints.md#pools-jobs-and-deployment).
+
+For example, after the MCP session is initialized, a read tool call uses the
+same argument names as the registered schema:
+
+```python
+result = await session.call_tool(
+    "listserv_search",
+    arguments={
+        "list_id": "RAN-WG1",
+        "date": [">= 2026-10-01", "<= 2026-10-31"],
+        "text": "handover",
+        "limit": 10,
+    },
+)
+if result.isError:
+    raise RuntimeError(result.content[0].text)
+print(result.content[0].text)  # JSON text; the tool result wraps this payload.
+```
+
+The example ID is illustrative only. Use `tools/list` for the live tool schema;
+the SDK/client connection setup is shown under [Python client example](#python-client-example).
+
 ## Jobs
 
-Mutation tools enqueue durable work rather than blocking on downloads/parsing.
-The returned JSON includes `job_id`, `status`, a message, and links to the job
-and its SSE events. Poll `get_job(job_id)` until `succeeded`, `failed`, or
-`cancelled`; inspect summary counts and failure details as well as status.
+Other mutation tools enqueue durable work rather than blocking on
+downloads/parsing. Their returned JSON includes `job_id`, `status`, a message,
+and links to the job and its SSE events. LISTSERV enqueue tools use the distinct
+`job_id`/`status`/`url` contract described above. Poll `get_job(job_id)` until
+`succeeded`, `failed`, or `cancelled`; inspect summary counts and failure
+details as well as status.
 
 - `parse_tdocs` takes a supported filter dictionary and optional force flag;
   the registry eligibility and batch/completeness rules still apply.

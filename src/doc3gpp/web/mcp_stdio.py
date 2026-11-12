@@ -318,6 +318,7 @@ async def run_stdio(settings: Settings) -> None:
             if drained:
                 for cleanup in (
                     state.close_docx_pool,
+                    getattr(state, "close_listserv_services", None),
                     getattr(state, "close_embedder", None),
                     state.engine.dispose,
                     state.testcase_engine.dispose,

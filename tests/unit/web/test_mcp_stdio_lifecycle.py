@@ -589,6 +589,7 @@ def test_shutdown_keeps_resources_alive_for_inflight_job_thread(
 
     state.services.job_repo = Repo()
     state.services.tdoc_index = SimpleNamespace(rebuild=rebuild)
+    state.close_listserv_services = lambda: events.append("listserv")
 
     class Worker(JobWorker):
         def __init__(self, state):
@@ -621,7 +622,7 @@ def test_shutdown_keeps_resources_alive_for_inflight_job_thread(
             runner.cancel()
             await asyncio.sleep(0.1)
             assert not runner.done()
-            assert not any(name in events for name in ("docx", "embedder", "engine"))
+            assert not any(name in events for name in ("docx", "listserv", "embedder", "engine"))
             if mode != "detached-thread":
                 assert state.services.job_repo.status == JobStatus.RUNNING
             # The pipeline must remain usable while the handler is still running.
@@ -630,8 +631,9 @@ def test_shutdown_keeps_resources_alive_for_inflight_job_thread(
             release_thread.set()
             result = (await asyncio.gather(runner, return_exceptions=True))[0]
         assert isinstance(result, asyncio.CancelledError)
-        assert events.index("thread finished") < events.index("embedder")
-        assert events.index("thread finished") < events.index("engine")
+        assert events.index("thread finished") < events.index("listserv")
+        assert events.index("listserv") < events.index("embedder")
+        assert events.index("embedder") < events.index("engine")
         assert state.services.job_repo.status == JobStatus.CANCELLED
 
     asyncio.run(exercise())

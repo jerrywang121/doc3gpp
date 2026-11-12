@@ -28,6 +28,7 @@ from doc3gpp.cli_auto_sync import (
     trigger_auto_sync,
 )
 from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
+from doc3gpp.cli_listserv import listserv_app
 from doc3gpp.cli_server import server_app
 from doc3gpp.cli_url_helpers import (
     _looks_like_3gpp_file_url,
@@ -156,6 +157,7 @@ app.add_typer(spec_app, name="spec")
 app.add_typer(testcase_app, name="testcase")
 app.add_typer(config_app, name="config")
 app.add_typer(cache_app, name="cache")
+app.add_typer(listserv_app, name="listserv")
 app.add_typer(server_app, name="server")
 
 logger = logging.getLogger(__name__)

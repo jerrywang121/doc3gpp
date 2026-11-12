@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · LISTSERV message{% endblock %}
+{% block content %}
+  <p><a href="/listserv">‹ LISTSERV archives</a></p>
+  <h1>{{ record.subject }}</h1>
+  <dl>
+    <dt>List</dt><dd>{{ record.list_id }}</dd>
+    <dt>Sender</dt><dd>{{ record.sender }}</dd>
+    <dt>Date</dt><dd>{{ record.date }}</dd>
+    <dt>Week</dt><dd>{{ record.week }}</dd>
+    <dt>TDocs</dt><dd>{{ record.tdocs|join(", ") if record.tdocs else "None" }}</dd>
+    <dt>Archive URL</dt>
+    <dd>
+      {% if upstream_url %}<a href="{{ upstream_url }}" rel="noopener noreferrer">Open public ETSI archive message</a>{% else %}{{ record.url }}{% endif %}
+    </dd>
+  </dl>
+
+  <section class="card">
+    <h2>Attachments</h2>
+    {% if record.attachments is none %}
+      <p>Not parsed.</p>
+    {% elif record.attachments %}
+      <ul>
+        {% for attachment in record.attachments %}
+          <li><span>{{ attachment.name }}</span> · <code>{{ attachment.url }}</code></li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No attachments recorded.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Stored message content</h2>
+    {% if record.content is none %}
+      <p>Not parsed.</p>
+    {% elif record.content == "" %}
+      <p>Parsed content is empty.</p>
+    {% else %}
+      <pre class="listserv-content">{{ record.content }}</pre>
+    {% endif %}
+    {% if record.content_truncated %}
+      <p class="meta">Stored content was truncated before persistence; discarded original text is not available.</p>
+    {% endif %}
+    {% if record.parsed_at %}<p class="meta">Parsed at {{ record.parsed_at }} · parser {{ record.parser_version }}</p>{% endif %}
+  </section>
+{% endblock %}

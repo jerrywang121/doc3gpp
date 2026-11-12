@@ -3385,3 +3385,58 @@ doc3gpp server logs --follow
 doc3gpp server stop
 doc3gpp server uninstall systemd
 ```
+
+## LISTSERV commands
+
+The `listserv` group works with **public** ETSI LISTSERV archives on
+`https://list.etsi.org`. It accepts an exact public list ID, not a local
+allowlist. `RAN-WG1` and the TDoc IDs below are examples only. `listserv list`
+shows distinct IDs already represented by stored messages; it is not an upstream
+catalogue and does not discover lists.
+
+```bash
+# Sync message listings. Without --date, cover the rolling preceding calendar
+# year through today, inclusive; repeated filters intersect.
+doc3gpp listserv sync RAN-WG1
+doc3gpp listserv sync RAN-WG1 --date '>= 2026-10-01' --date '<= 2026-10-31'
+
+# Parse already-synced messages separately; --force reparses existing details.
+doc3gpp listserv parse RAN-WG1 --date '>= 2026-10-01' --force
+
+# Stored-only reads and search modes (FTS, semantic, hybrid, filter-only).
+doc3gpp listserv list
+doc3gpp listserv search --list-id RAN-WG1 --tdocs R1-2610793 --format json
+doc3gpp listserv search --text 'handover' --semantic 'mobility procedure' --limit 10
+doc3gpp listserv show 'https://list.etsi.org/scripts/wa.exe?A2=RAN-WG1;2026-10-15;EXAMPLE' --format json
+
+# Inspect or rebuild one/both derived indexes from SQL-stored records.
+doc3gpp listserv index
+doc3gpp listserv index --rebuild-all --batch 100 --stale-only
+```
+
+`sync LIST_ID` and `parse LIST_ID` each require one exact ID. `--date` is
+repeatable and accepts `=`, `!=`, `<`, `<=`, `>`, and `>=` comparisons against
+the message's displayed calendar date. `--force` makes sync revisit selected
+archive pages regardless of stored coverage; on parse it reparses already
+parsed messages. Sync fetches listings only; parse is a separate operation over
+stored messages. Neither operation has an implicit read-time counterpart.
+
+`listserv search` accepts `--date`, `--list-id`, `--from`, `--subject`,
+`--tdocs`, `--text`, `--semantic`, `--limit`, `--offset`, and
+`--format table|json`. `--text` selects FTS5, `--semantic` selects vector
+search, both select hybrid, and neither selects SQL filter-only search. Rich
+LIKE filters use the shared `%`/`_`, `!`, `null`, and `not-null` grammar.
+Unavailable FTS or semantic/vector dependencies return an actionable error,
+not an apparently successful empty result.
+
+`listserv index` accepts `--rebuild`, `--rebuild-embeddings`, `--rebuild-all`,
+`--batch`, `--resume`, `--stale-only`, and `--quiet`. Semantic rebuilding needs
+the `[semantic]` extra, SQLite vector support, and a configured embedding
+endpoint. It reads stored SQL content and does not fetch ETSI pages.
+
+Search JSON contains the message `url` and `tdocs`, nullable
+`content_truncated`, and a separate nullable `preview_truncated`; search
+content is a preview capped at 200 characters. `show` returns all stored
+content, not the original tail omitted by the configured storage cap. See
+[LISTSERV flows and limitations](processes.md#listserv-archive-flow) and the
+[HTTP/MCP contracts](web-server.md#listserv-archive-endpoints).

@@ -60,6 +60,11 @@ Important change entry points:
   matched-source/chunk provenance, mode-specific scores, JSON parity.
 - Jobs: `models/jobs.py`, `web/workers/handlers.py`, `job_worker.py`, job routes,
   `web/state.py`; cancellation is cooperative and queue ownership single-process.
+- LISTSERV archives: `models/listserv.py`, `services/listserv_sync.py`,
+  `services/listserv_parse.py`, `services/listserv_search.py`,
+  `services/listserv_index.py`, `web/routes/listserv.py`,
+  `web/workers/listserv_jobs.py`; see
+  [runtime contracts](docs/processes.md#listserv-archive-flow).
 - MCP: `web/mcp_server.py`; `get_skill` returns packaged raw Markdown, other
   matching JSON reads share HTTP payloads. Register tools, not duplicate queries.
   `web/mcp_stdio.py` owns `doc3gpp mcp`, reusing `build_state` and
@@ -78,6 +83,16 @@ See the linked process/constraint guides before changing skip rules, force,
 cache recovery, semantic freshness, or resource ownership. In particular,
 do not confuse SQL completeness with derived-cache availability or make a
 snapshot content read silently download/parse.
+
+For LISTSERV changes, preserve public-host-only transport, actual-page URL
+coverage, the separate sync/parse boundary, SQL-only read paths, independent
+source/index state, and shared HTTP/MCP/CLI payload serializers. Keep ORM/schema
+reporting aligned and never add attachment downloads or implicit read-time work.
+Web LISTSERV facades and worker-built sync/parse services borrow the app's lazy
+shared embedder. Close per-job source/index resources on their worker thread,
+then app facades after jobs drain and before the shared embedder. CLI and
+standalone callers close factory-built services they own; never close injected
+providers.
 
 ## Development and validation
 

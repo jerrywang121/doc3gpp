@@ -192,3 +192,82 @@ def test_build_state_wires_testcase_engine(sqlite_env) -> None:
     state = build_state(Settings())
     assert state.testcase_engine is get_testcase_engine()
     assert state.testcase_engine is not state.engine
+
+
+
+def test_build_state_wires_one_lazy_listserv_embedder_provider(sqlite_env, monkeypatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from time import sleep
+
+    from doc3gpp.services import factory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.web import app as web_app
+
+    create_schema()
+    fake_embedder = object()
+    build_calls: list[bool] = []
+    providers = {}
+
+    def build_embedder(_settings):
+        build_calls.append(True)
+        sleep(0.03)
+        return fake_embedder
+
+    monkeypatch.setattr(factory, "build_embedder", build_embedder)
+
+    def build_search(_settings, **kwargs):
+        providers["search"] = kwargs.get("embedder_factory")
+        return object()
+
+    def build_index(_settings, **kwargs):
+        providers["index"] = kwargs.get("embedder_factory")
+        return object()
+
+    monkeypatch.setattr(factory, "build_listserv_search_service", build_search)
+    monkeypatch.setattr(factory, "build_listserv_index_service", build_index)
+
+    state = web_app.build_state(Settings())
+    provider = getattr(state.services, "listserv_embedder_factory", None)
+    assert callable(provider), "web state must expose its shared lazy LISTSERV provider"
+    assert build_calls == [], "building web state must not initialize the embedder"
+    assert providers == {"search": provider, "index": provider}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        resolved = list(pool.map(lambda _index: provider(), range(8)))
+
+    assert all(embedder is fake_embedder for embedder in resolved)
+    assert build_calls == [True], "concurrent first use must build exactly one embedder"
+
+
+def test_lifespan_closes_listserv_services_after_worker_drain_before_embedder(
+    sqlite_env, monkeypatch
+) -> None:
+    from doc3gpp.web import app as web_app
+
+    events: list[tuple[str, bool]] = []
+    real_build_state = web_app.build_state
+
+    def build_state_with_recording_close(settings: Settings) -> WebState:
+        state = real_build_state(settings)
+        close_listserv = getattr(state, "close_listserv_services", None)
+        assert callable(close_listserv), "web state must own LISTSERV service cleanup"
+        close_embedder = state.close_embedder
+
+        def close_listserv_services() -> None:
+            events.append(("listserv", state.jobs.task.done()))
+            close_listserv()
+
+        def close_shared_embedder() -> None:
+            events.append(("embedder", state.jobs.task.done()))
+            if close_embedder is not None:
+                close_embedder()
+
+        state.close_listserv_services = close_listserv_services
+        state.close_embedder = close_shared_embedder
+        return state
+
+    monkeypatch.setattr(web_app, "build_state", build_state_with_recording_close)
+    with TestClient(build_app(Settings())):
+        pass
+
+    assert events == [("listserv", True), ("embedder", True)]

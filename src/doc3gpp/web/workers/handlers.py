@@ -39,12 +39,15 @@ from doc3gpp.parsers.direct_extractor import (
     validate_tdoc_ftp_url,
 )
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
+from doc3gpp.services import factory
+from doc3gpp.services.listserv_index import IndexRebuildCancelled
 from doc3gpp.services.tdoc_cr_service import ExtractResult
 from doc3gpp.services.tdoc_family_service import FamilyExtractResult
 from doc3gpp.services.tdoc_parse_selection import parse_selection_kwargs
 from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.state import ServiceContainer
+from doc3gpp.web.workers.listserv_jobs import summarize_batch, validate_batch_request
 
 logger = logging.getLogger(__name__)
 
@@ -892,6 +895,120 @@ async def _cache_purge(
     return {"deleted": deleted}
 
 
+async def _run_listserv_batch(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+    verb: str,
+    builder_name: str,
+) -> Mapping[str, JSONValue]:
+    list_id, dates = validate_batch_request(
+        job.params.get("list_id"), job.params.get("dates")
+    )
+    force = bool(job.params.get("force", False))
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    progress(f"starting LISTSERV {verb} for {list_id}")
+
+    def work():
+        # The job owns this service and its source: build, run and close all
+        # happen on the worker thread, so the source is never closed mid-call.
+        builder = getattr(factory, builder_name)
+        embedder_factory = getattr(services, "listserv_embedder_factory", None)
+        service = (
+            builder(settings)
+            if embedder_factory is None
+            else builder(settings, embedder_factory=embedder_factory)
+        )
+        try:
+            return getattr(service, verb)(
+                list_id,
+                dates=dates,
+                force=force,
+                on_progress=progress,
+                cancelled=cancel_event.is_set,
+            )
+        finally:
+            try:
+                service.close()
+            except Exception:
+                logger.warning("LISTSERV %s service close failed", verb, exc_info=True)
+
+    result = await _to_thread(work)
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    summary = summarize_batch(verb, list_id, result)
+    progress(str(summary["message"]), force=True)
+    return summary
+
+
+async def _listserv_sync(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    return await _run_listserv_batch(
+        job, services, settings, progress=progress, cancel_event=cancel_event,
+        verb="sync", builder_name="build_listserv_sync_service",
+    )
+
+
+async def _listserv_parse(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    return await _run_listserv_batch(
+        job, services, settings, progress=progress, cancel_event=cancel_event,
+        verb="parse", builder_name="build_listserv_parse_service",
+    )
+
+
+async def _listserv_index(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    service = services.listserv_index
+    if service is None:
+        raise RuntimeError("listserv index is not available")
+    request = _index_request(job.params)
+    progress("starting listserv index maintenance")
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+
+    def on_progress(message: str) -> None:
+        progress(message, force=True)
+
+    try:
+        result = await _to_thread(
+            service.rebuild,
+            request,
+            quiet=True,
+            on_progress=on_progress,
+            cancelled=cancel_event.is_set,
+        )
+    except IndexRebuildCancelled:
+        raise asyncio.CancelledError() from None
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    summary = result.to_dict() if hasattr(result, "to_dict") else {"status": "complete"}
+    progress("listserv index maintenance complete", force=True)
+    return summary
+
+
 class JobHandlers:
     """Registry mapping each :class:`JobKind` to its handler.
 
@@ -913,6 +1030,9 @@ class JobHandlers:
         JobKind.INDEX_SPEC_DOCS: _index_spec_docs,
         JobKind.REBUILD_SEARCH: _rebuild_search,
         JobKind.CACHE_PURGE: _cache_purge,
+        JobKind.LISTSERV_SYNC: _listserv_sync,
+        JobKind.LISTSERV_PARSE: _listserv_parse,
+        JobKind.LISTSERV_INDEX: _listserv_index,
     }
 
 

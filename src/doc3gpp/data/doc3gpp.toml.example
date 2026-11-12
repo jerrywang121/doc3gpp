@@ -405,3 +405,18 @@ port = 13999
 # list the origins of browser-based MCP clients (e.g. http://127.0.0.1)
 # here. Empty list disables the origin check.
 # allowed_origins = ["http://127.0.0.1", "http://localhost"]
+
+# ── ETSI LISTSERV archives (`doc3gpp listserv ...`) ──────────────────────────
+# Knobs for public ETSI LISTSERV message parsing and storage.
+[listserv]
+# Maximum number of Unicode characters stored from a parsed message body.
+# Changes apply to subsequent parses and forced reparses.
+max_content_chars = 10000
+# Update the FTS5 index after committed sync/parse source changes
+# (also requires [search] enabled). Failures never roll back source data.
+auto_index_on_sync = true
+auto_index_on_parse = true
+# Update the vector index after committed sync/parse source changes
+# (also requires [semantic_search] to be configured).
+auto_embed_on_sync = true
+auto_embed_on_parse = true

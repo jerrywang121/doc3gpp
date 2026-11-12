@@ -77,6 +77,12 @@ command syntax in [cli.md](cli.md). Paths below are relative to the repository.
 | MCP tool registration and payloads | `src/doc3gpp/web/mcp_server.py` |
 | Job kinds/SQL/worker/handlers | `src/doc3gpp/models/jobs.py`, `src/doc3gpp/storage/repositories/jobs_sql.py`, `src/doc3gpp/web/workers/job_worker.py`, `src/doc3gpp/web/workers/handlers.py` |
 | Templates / HTMX / sync hub | `src/doc3gpp/web/templates/`, `src/doc3gpp/web/filters.py`, `src/doc3gpp/web/static/js/sync_hub.js` |
+| LISTSERV CLI group and SDK factories | `src/doc3gpp/cli_listserv.py`, `src/doc3gpp/services/factory.py` (`build_listserv_sync_service`, `build_listserv_parse_service`, `build_listserv_service`, `build_listserv_search_service`, `build_listserv_index_service`) |
+| LISTSERV source models, parsers, and public-only transport | `src/doc3gpp/models/listserv.py`, `src/doc3gpp/parsers/listserv_archive.py`, `src/doc3gpp/parsers/listserv_detail.py`, `src/doc3gpp/scraping/listserv_source.py` |
+| LISTSERV orchestration and shared payloads | `src/doc3gpp/services/listserv_sync.py`, `src/doc3gpp/services/listserv_parse.py`, `src/doc3gpp/services/listserv_service.py`, `src/doc3gpp/services/listserv_search.py`, `src/doc3gpp/services/listserv_index.py`, `src/doc3gpp/models/listserv_payloads.py` |
+| Optional LISTSERV semantic builder | `build_listserv_semantic_service` in `src/doc3gpp/services/listserv_semantic.py`; normal callers use the search/index builders above |
+| LISTSERV SQL source / derived indexes / schema | `src/doc3gpp/storage/repositories/listserv_sql.py`, `src/doc3gpp/storage/repositories/listserv_search_sql.py`, `src/doc3gpp/storage/repositories/listserv_vector_sql.py`, `src/doc3gpp/storage/db/models.py`, `src/doc3gpp/models/schema_info.py` |
+| LISTSERV HTTP/UI/MCP and jobs | `src/doc3gpp/web/routes/listserv.py`, `src/doc3gpp/web/templates/listserv.html`, `src/doc3gpp/web/static/js/listserv.js`, `src/doc3gpp/web/workers/listserv_jobs.py`, `src/doc3gpp/web/mcp_server.py` |
 
 `server.enabled` gates the HTTP server and HTTP MCP mount, while `mcp.enabled`
 gates both the HTTP mount and standalone `doc3gpp mcp` stdio. The MCP transport
@@ -92,3 +98,5 @@ setting selects the HTTP mount only.
 - `scripts/dev_run.sh`: development bootstrap helper.
 - `pyproject.toml`: dependencies/extras, pytest markers, Ruff/build configuration.
 - `.github/workflows/publish.yml`: release packaging/publication, not a test matrix.
+- `tests/unit/test_listserv_docs.py` and `tests/{unit,integration}/test_listserv_*.py`:
+  LISTSERV docs/parity, contracts, and offline behavior.

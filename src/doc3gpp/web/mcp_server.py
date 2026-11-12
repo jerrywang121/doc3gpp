@@ -26,6 +26,7 @@ from doc3gpp.models.jobs import JobKind
 from doc3gpp.models.search import (
     SearchFilters,
     SearchIndexCorruptError,
+    SearchQueryError,
     SearchUnavailableError,
 )
 from doc3gpp.models.semantic_search import (
@@ -53,6 +54,7 @@ from doc3gpp.web.errors import (
     TestcaseNotFoundError,
     TSGNotFoundError,
     map_mcp_error,
+    map_search_error,
     map_tdoc_content_error,
 )
 from doc3gpp.web.filters import parse_date_query, parse_text_query
@@ -1175,6 +1177,147 @@ def build_mcp_server(state: WebState) -> MCPServer:
                 "offset": offset,
             }
         )
+
+    # ---- ETSI LISTSERV --------------------------------------------
+    from doc3gpp.models.listserv import ListservFilters, parse_date_set
+    from doc3gpp.models.listserv_payloads import (
+        listserv_record_payload,
+        listserv_search_payload,
+    )
+    from doc3gpp.models.search import SearchError
+    from doc3gpp.web.routes.listserv import (
+        enqueue_listserv_index,
+        enqueue_listserv_parse,
+        enqueue_listserv_sync,
+    )
+
+    def _listserv_job_result(job: Any) -> str:
+        return _to_json(
+            {
+                "job_id": job.id,
+                "status": job.status.value,
+                "url": _job_url(job.id),
+            }
+        )
+
+    @server.tool(
+        name="listserv_sync",
+        description="Enqueue sync of one exact public ETSI LISTSERV list ID.",
+    )
+    @_mcp_error_guard
+    def listserv_sync(
+        list_id: Annotated[str, Field(description="Exact LISTSERV list ID to sync.")],
+        date: Annotated[list[str] | None, Field(description="Repeatable displayed-date comparison filters.")] = None,
+        force: Annotated[bool, Field(description="Revisit selected archive pages regardless of stored coverage.")] = False,
+    ) -> str:
+        job = enqueue_listserv_sync(state.services.job_repo, list_id, date, force)
+        return _listserv_job_result(job)
+
+    @server.tool(
+        name="listserv_parse",
+        description="Enqueue parsing of stored messages for one exact LISTSERV list ID.",
+    )
+    @_mcp_error_guard
+    def listserv_parse(
+        list_id: Annotated[str, Field(description="Exact LISTSERV list ID to parse.")],
+        date: Annotated[list[str] | None, Field(description="Repeatable displayed-date comparison filters.")] = None,
+        force: Annotated[bool, Field(description="Reparse already-parsed selected messages.")] = False,
+    ) -> str:
+        job = enqueue_listserv_parse(state.services.job_repo, list_id, date, force)
+        return _listserv_job_result(job)
+
+    @server.tool(
+        name="listserv_list",
+        description="List distinct LISTSERV IDs represented by stored messages.",
+    )
+    @_mcp_error_guard
+    def listserv_list() -> str:
+        return _to_json({"list_ids": services.listserv.list_ids()})
+
+    @server.tool(
+        name="listserv_search",
+        description=(
+            "Search stored LISTSERV messages by text, semantic similarity, or filters. "
+            "Dates are repeatable displayed-date comparisons; limit and offset page results."
+        ),
+    )
+    @_mcp_error_guard
+    def listserv_search(
+        date: Annotated[list[str] | None, Field(description="Repeatable displayed-date comparison filters.")] = None,
+        list_id: Annotated[str | None, Field(description="Rich LIKE filter on the stored list ID.")] = None,
+        sender: Annotated[str | None, Field(description="Rich LIKE filter on the displayed sender.")] = None,
+        subject: Annotated[str | None, Field(description="Rich LIKE filter on the subject.")] = None,
+        tdocs: Annotated[str | None, Field(description="Rich LIKE filter on extracted TDoc IDs.")] = None,
+        text: Annotated[str | None, Field(description="FTS5 text or MATCH expression.")] = None,
+        semantic: Annotated[str | None, Field(description="Embedding query for semantic search.")] = None,
+        limit: Annotated[int, Field(description="Maximum number of results (0–150).")] = 20,
+        offset: Annotated[int, Field(description="Number of results to skip.")] = 0,
+    ) -> str:
+        try:
+            filters = ListservFilters(
+                list_id=list_id,
+                sender=sender,
+                subject=subject,
+                tdocs=tdocs,
+                dates=parse_date_set(date) if date else None,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as exc:
+            raise InvalidFilterError(str(exc)) from exc
+        try:
+            results = services.listserv_search.search(
+                text=text, semantic=semantic, filters=filters
+            )
+        except SearchQueryError:
+            raise
+        except SearchIndexCorruptError as exc:
+            raise map_search_error(exc, resource="listserv") from exc
+        except SearchError as exc:
+            raise SettingsDisabledError(str(exc)) from exc
+        return _to_json([listserv_search_payload(result) for result in results])
+
+    @server.tool(
+        name="listserv_show",
+        description="Show a stored LISTSERV message by its exact detail URL.",
+    )
+    @_mcp_error_guard
+    def listserv_show(
+        url: Annotated[str, Field(description="Exact stored message detail URL.")]
+    ) -> str:
+        return _to_json(listserv_record_payload(services.listserv.show(url)))
+
+    @server.tool(
+        name="listserv_index_status",
+        description="Return LISTSERV text and vector index status without fetching upstream data.",
+    )
+    @_mcp_error_guard
+    def listserv_index_status() -> str:
+        return _to_json(services.listserv_index.status().to_dict())
+
+    @server.tool(
+        name="listserv_index_rebuild",
+        description="Enqueue LISTSERV FTS5/vector index maintenance.",
+    )
+    @_mcp_error_guard
+    def listserv_index_rebuild(
+        rebuild: Annotated[bool, Field(description="Rebuild the LISTSERV FTS5 index.")] = False,
+        rebuild_embeddings: Annotated[bool, Field(description="Rebuild the LISTSERV vector index.")] = False,
+        rebuild_all: Annotated[bool, Field(description="Rebuild both LISTSERV indexes.")] = False,
+        batch: Annotated[int | None, Field(description="Positive rebuild batch size.")] = None,
+        resume: Annotated[bool, Field(description="Resume an interrupted rebuild.")] = False,
+        stale_only: Annotated[bool, Field(description="Only rebuild stale LISTSERV records.")] = False,
+    ) -> str:
+        job = enqueue_listserv_index(
+            state.services.job_repo,
+            rebuild=rebuild,
+            rebuild_embeddings=rebuild_embeddings,
+            rebuild_all=rebuild_all,
+            batch=batch,
+            resume=resume,
+            stale_only=stale_only,
+        )
+        return _listserv_job_result(job)
 
     _reject_unknown_search_arguments(server)
     return server

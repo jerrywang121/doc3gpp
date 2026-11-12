@@ -27,7 +27,17 @@ from doc3gpp.repository.protocols import (
 )
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.client import ScraperClient
+from doc3gpp.scraping.listserv_source import ListservSource
 from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
+from doc3gpp.services.listserv_index import ListservIndexService
+from doc3gpp.services.listserv_parse import ListservParseService
+from doc3gpp.services.listserv_search import ListservSearchService
+from doc3gpp.services.listserv_semantic import (
+    ListservSemanticService,
+    build_listserv_semantic_service,
+)
+from doc3gpp.services.listserv_service import ListservService
+from doc3gpp.services.listserv_sync import ListservSyncService
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -50,6 +60,13 @@ from doc3gpp.settings.schema import Settings
 if TYPE_CHECKING:
     from doc3gpp.parsers.docx_converter import DocxMemberPool
     from doc3gpp.services.spec_doc_service import SpecDocService
+from doc3gpp.storage.repositories.listserv_search_sql import (
+    SQLAlchemyListservSearchRepository,
+)
+from doc3gpp.storage.repositories.listserv_sql import SQLAlchemyListservRepository
+from doc3gpp.storage.repositories.listserv_vector_sql import (
+    SQLAlchemyListservVectorRepository,
+)
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
 from doc3gpp.storage.repositories.spec_doc_search_sql import (
@@ -870,3 +887,161 @@ def build_search_service(
         return SearchService(repo=repo, reranker=reranker, quiet=quiet)
     except SearchUnavailableError:
         return None
+
+
+def build_listserv_index_service(
+    settings: Settings | None = None,
+    *,
+    embedder: Embedder | None = None,
+    embedder_factory: Callable[[], Embedder | None] | None = None,
+) -> ListservIndexService:
+    """Construct a :class:`ListservIndexService` with lazily built FTS5 and vector components."""
+    if settings is None:
+        settings = get_settings()
+    source_repo = SQLAlchemyListservRepository()
+
+    def _build_fts_repo() -> SQLAlchemyListservSearchRepository | None:
+        if not settings.search.enabled:
+            return None
+        try:
+            return SQLAlchemyListservSearchRepository(
+                source_repository=source_repo, settings=settings
+            )
+        except SearchUnavailableError:
+            return None
+
+    def _build_sem_service() -> ListservSemanticService | None:
+        selected_embedder = embedder
+        if embedder_factory is not None:
+            selected_embedder = embedder_factory()
+            if selected_embedder is None:
+                return None
+        return build_listserv_semantic_service(
+            settings, embedder=selected_embedder, source_repository=source_repo
+        )
+
+    def _build_vector_status() -> tuple[SQLAlchemyListservVectorRepository, str | None] | None:
+        sem_cfg = settings.semantic_search
+        if not sem_cfg.enabled:
+            return None
+        if embedder is not None:
+            model = getattr(embedder, "model_name", None)
+        elif (sem_cfg.embedding_base_url or "").strip():
+            model = sem_cfg.embedding_model
+        else:
+            return None
+        try:
+            repo = SQLAlchemyListservVectorRepository(
+                chunk_settings=sem_cfg, initialize_metadata=False
+            )
+        except VectorIndexUnavailableError:
+            return None
+        return repo, model
+
+    return ListservIndexService(
+        source_repository=source_repo,
+        fts_factory=_build_fts_repo,
+        semantic_factory=_build_sem_service,
+        vector_status_factory=_build_vector_status,
+        settings=settings,
+    )
+
+
+def build_listserv_sync_service(
+    settings: Settings | None = None,
+    *,
+    embedder_factory: Callable[[], Embedder | None] | None = None,
+) -> ListservSyncService:
+    """Construct a :class:`ListservSyncService` backed by the configured repository and source."""
+    if settings is None:
+        settings = get_settings()
+    return ListservSyncService(
+        repository=SQLAlchemyListservRepository(),
+        source=ListservSource(settings=settings),
+        settings=settings,
+        index_service=build_listserv_index_service(
+            settings, embedder_factory=embedder_factory
+        ),
+        owns_index_service=True,
+    )
+
+
+def build_listserv_parse_service(
+    settings: Settings | None = None,
+    *,
+    embedder_factory: Callable[[], Embedder | None] | None = None,
+) -> ListservParseService:
+    """Construct a :class:`ListservParseService` backed by the configured repository and source."""
+    if settings is None:
+        settings = get_settings()
+    return ListservParseService(
+        repository=SQLAlchemyListservRepository(),
+        source=ListservSource(settings=settings),
+        settings=settings,
+        index_service=build_listserv_index_service(
+            settings, embedder_factory=embedder_factory
+        ),
+        owns_index_service=True,
+    )
+
+
+def build_listserv_service(
+    settings: Settings | None = None,
+) -> ListservService:
+    """Construct a SQL-only :class:`ListservService` backed by the configured repository."""
+    _ = settings
+    return ListservService(
+        repository=SQLAlchemyListservRepository(),
+    )
+
+
+def build_listserv_search_service(
+    settings: Settings | None = None,
+    *,
+    embedder: Embedder | None = None,
+    semantic_service: ListservSemanticService | None | object = _UNSET,
+    embedder_factory: Callable[[], Embedder | None] | None = None,
+) -> ListservSearchService:
+    """Construct a :class:`ListservSearchService` backed by SQL and lazy FTS5/vector indexes."""
+    if settings is None:
+        settings = get_settings()
+    source_repo = SQLAlchemyListservRepository()
+
+    def _build_fts_repo() -> SQLAlchemyListservSearchRepository | None:
+        if not settings.search.enabled:
+            return None
+        try:
+            return SQLAlchemyListservSearchRepository(
+                source_repository=source_repo,
+                settings=settings,
+            )
+        except SearchUnavailableError:
+            return None
+
+    def _build_sem_service() -> ListservSemanticService | None:
+        selected_embedder = embedder
+        if embedder_factory is not None:
+            selected_embedder = embedder_factory()
+            if selected_embedder is None:
+                return None
+        return build_listserv_semantic_service(
+            settings,
+            embedder=selected_embedder,
+            source_repository=source_repo,
+        )
+
+    return ListservSearchService(
+        repository=source_repo,
+        fts_factory=_build_fts_repo,
+        semantic_factory=(
+            _build_sem_service
+            if semantic_service is _UNSET
+            else None
+        ),
+        **(
+            {}
+            if semantic_service is _UNSET
+            else {"semantic_service": semantic_service}
+        ),
+        settings=settings,
+    )

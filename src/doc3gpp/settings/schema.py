@@ -945,6 +945,36 @@ class MCPSettings(BaseModel):
     )
 
 
+class ListservSettings(BaseModel):
+    """Knobs for the ETSI LISTSERV archive ingestion and parsing subsystem."""
+
+    max_content_chars: int = Field(
+        default=10000,
+        ge=1,
+        description=(
+            "Maximum number of Unicode characters stored from a parsed "
+            "LISTSERV message body. Subsequent parses or forced reparses "
+            "apply this limit; existing rows are not rewritten."
+        ),
+    )
+    auto_index_on_sync: bool = Field(
+        default=True,
+        description="Update the LISTSERV FTS5 index after committed sync changes.",
+    )
+    auto_index_on_parse: bool = Field(
+        default=True,
+        description="Update the LISTSERV FTS5 index after committed detail parses.",
+    )
+    auto_embed_on_sync: bool = Field(
+        default=True,
+        description="Update the LISTSERV vector index after committed sync changes.",
+    )
+    auto_embed_on_parse: bool = Field(
+        default=True,
+        description="Update the LISTSERV vector index after committed detail parses.",
+    )
+
+
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables or .env.
 
@@ -992,6 +1022,7 @@ class Settings(BaseSettings):
     pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
+    listserv: ListservSettings = Field(default_factory=ListservSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="DOC3GPP_",

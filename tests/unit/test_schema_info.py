@@ -21,7 +21,7 @@ CONTENT_TABLES = (
 
 def test_schema_field_order_and_keys() -> None:
     assert SCHEMA_FIELDS == ["table", "field", "type", "nullable", "description", "values"]
-    assert sorted(RESOURCE_SCHEMAS) == ["meeting", "spec", "spec_doc", "tdoc", "testcase", "tsg", "wi"]
+    assert sorted(RESOURCE_SCHEMAS) == ["listserv", "meeting", "spec", "spec_doc", "tdoc", "testcase", "tsg", "wi"]
 
 
 def test_spec_doc_zip_inventory_schema_is_specdata_only() -> None:
@@ -221,6 +221,9 @@ def test_registry_matches_orm_columns() -> None:
     assert hasattr(orm_models, "TDocZipInventoryOrm"), "ZIP inventory ORM is missing"
     assert hasattr(orm_models, "SpecDocZipInventoryORM"), "Spec ZIP inventory ORM is missing"
     assert hasattr(orm_models, "SpecDocPresentationORM"), "Spec presentation ORM is missing"
+    assert hasattr(orm_models, "ListservMessageORM"), "ListservMessageORM is missing"
+    assert hasattr(orm_models, "ListservDetailORM"), "ListservDetailORM is missing"
+    assert hasattr(orm_models, "ListservArchivePageORM"), "ListservArchivePageORM is missing"
 
     expected = {
         "tsgs": TsgORM,
@@ -247,6 +250,9 @@ def test_registry_matches_orm_columns() -> None:
         "testcases": TestCaseORM,
         "testcase_status": TestCaseStatusORM,
         "testcase_sources": TestCaseSourceORM,
+        "listserv_messages": orm_models.ListservMessageORM,
+        "listserv_details": orm_models.ListservDetailORM,
+        "listserv_archive_pages": orm_models.ListservArchivePageORM,
     }
     by_table = {}
     for tables in RESOURCE_SCHEMAS.values():

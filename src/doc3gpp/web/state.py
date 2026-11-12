@@ -27,7 +27,10 @@ from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 
 if TYPE_CHECKING:
-    from doc3gpp.repository.protocols import JobRepository, TDocRepository
+    from doc3gpp.repository.protocols import Embedder, JobRepository, TDocRepository
+    from doc3gpp.services.listserv_index import ListservIndexService
+    from doc3gpp.services.listserv_search import ListservSearchService
+    from doc3gpp.services.listserv_service import ListservService
     from doc3gpp.services.meetings_service import MeetingService
     from doc3gpp.services.search_service import SearchService
     from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -166,6 +169,10 @@ class ServiceContainer:
     spec_doc_index: SpecDocIndexService | None = None
     pipeline: PipelineRuntime | None = None
     tdoc_content: TDocContentService | None = None
+    listserv: ListservService | None = None
+    listserv_search: ListservSearchService | None = None
+    listserv_index: ListservIndexService | None = None
+    listserv_embedder_factory: Callable[[], Embedder | None] | None = None
 
 
 @dataclass(slots=True)
@@ -198,6 +205,7 @@ class WebState:
     specdata_engine: Engine | None = None
     close_embedder: Callable[[], None] | None = None
     close_docx_pool: Callable[[], None] | None = None
+    close_listserv_services: Callable[[], None] | None = None
 
 
 __all__ = ["JobWorkerHandle", "ServiceContainer", "WebState"]

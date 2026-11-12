@@ -153,12 +153,14 @@ def test_mcp_sync_parse_and_rebuild_enqueue_the_http_job_kinds(surfaces):
             {"list_id": "ran-wg1", "date": [">= 2026-10-01"], "force": True},
             JobKind.LISTSERV_SYNC,
             {"list_id": LIST_ID, "dates": [">= 2026-10-01"], "force": True},
+            "queued listserv_sync",
         ),
         (
             "listserv_parse",
             {"list_id": LIST_ID, "date": ["= 2026-10-15"]},
             JobKind.LISTSERV_PARSE,
             {"list_id": LIST_ID, "dates": ["= 2026-10-15"], "force": False},
+            "queued listserv_parse",
         ),
         (
             "listserv_index_rebuild",
@@ -171,15 +173,40 @@ def test_mcp_sync_parse_and_rebuild_enqueue_the_http_job_kinds(surfaces):
                 "resume": False,
                 "stale_only": False,
             },
+            "queued listserv_index",
         ),
     )
-    for name, arguments, kind, expected_params in cases:
+    for name, arguments, kind, expected_params, expected_message in cases:
         result = _call_json(server, name, arguments)
-        assert result["job_id"]
+        assert set(result) == {"job_id", "status", "message", "links"}
+        job_id = result["job_id"]
+        assert job_id
         assert result["status"] == "queued"
-        job = state.services.job_repo.get(result["job_id"])
+        assert result["message"] == expected_message
+        assert set(result["links"]) == {"self", "events"}
+        assert result["links"] == {
+            "self": f"/jobs/{job_id}",
+            "events": f"/jobs/{job_id}/events",
+        }
+        job = state.services.job_repo.get(job_id)
         assert job.kind is kind
         assert dict(job.params) == expected_params
+
+
+def test_mcp_standard_enqueue_response_shape_is_unchanged(surfaces):
+    _http, server, _state = surfaces
+    result = _call_json(server, "sync_meetings", {"tsg": "R5"})
+
+    assert set(result) == {"job_id", "status", "message", "links"}
+    job_id = result["job_id"]
+    assert job_id
+    assert result["status"] == "queued"
+    assert result["message"] == "queued sync_meetings for TSG R5"
+    assert set(result["links"]) == {"self", "events"}
+    assert result["links"] == {
+        "self": f"/jobs/{job_id}",
+        "events": f"/jobs/{job_id}/events",
+    }
 
 
 def test_mcp_show_not_found_is_actionable(surfaces):

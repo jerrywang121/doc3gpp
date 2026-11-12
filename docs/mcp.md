@@ -215,7 +215,8 @@ result, so compare the result text with HTTP JSON, not the protocol envelope.
 Semantic/vector availability errors remain explicit.
 
 Mutations reuse the existing queue. Enqueue results contain exactly `job_id`,
-`status`, and `url`; call `get_job(job_id)` to fetch later progress and result
+`status`, `message`, and `links`; `links` contains the job-detail `self` link and
+the SSE `events` link. Call `get_job(job_id)` to fetch later progress and result
 summaries. The job kinds are `listserv_sync`, `listserv_parse`, and
 `listserv_index`. Sync and parse summaries separate source `failed`/`failures`
 from derived `index_failed`/`index_failures`; index failures do not undo source
@@ -252,10 +253,9 @@ the SDK/client connection setup is shown under [Python client example](#python-c
 
 ## Jobs
 
-Other mutation tools enqueue durable work rather than blocking on
-downloads/parsing. Their returned JSON includes `job_id`, `status`, a message,
-and links to the job and its SSE events. LISTSERV enqueue tools use the distinct
-`job_id`/`status`/`url` contract described above. Poll `get_job(job_id)` until
+MCP enqueue tools create durable work rather than blocking on downloads/parsing.
+Their returned JSON uses the same `job_id`, `status`, `message`, and `links`
+shape, including the LISTSERV enqueue tools. Poll `get_job(job_id)` until
 `succeeded`, `failed`, or `cancelled`; inspect summary counts and failure
 details as well as status.
 

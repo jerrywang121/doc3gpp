@@ -163,8 +163,7 @@ def _job_url(job_id: str) -> str:
     return f"/jobs/{job_id}"
 
 
-def _enqueue(state: WebState, kind: JobKind, params: dict[str, Any], message: str) -> str:
-    job = state.services.job_repo.create(kind, params)
+def _job_result(job: Any, message: str) -> str:
     return _to_json(
         {
             "job_id": job.id,
@@ -176,6 +175,11 @@ def _enqueue(state: WebState, kind: JobKind, params: dict[str, Any], message: st
             },
         }
     )
+
+
+def _enqueue(state: WebState, kind: JobKind, params: dict[str, Any], message: str) -> str:
+    job = state.services.job_repo.create(kind, params)
+    return _job_result(job, message)
 
 
 def _validate_search_pagination(
@@ -1191,15 +1195,6 @@ def build_mcp_server(state: WebState) -> MCPServer:
         enqueue_listserv_sync,
     )
 
-    def _listserv_job_result(job: Any) -> str:
-        return _to_json(
-            {
-                "job_id": job.id,
-                "status": job.status.value,
-                "url": _job_url(job.id),
-            }
-        )
-
     @server.tool(
         name="listserv_sync",
         description="Enqueue sync of one exact public ETSI LISTSERV list ID.",
@@ -1211,7 +1206,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
         force: Annotated[bool, Field(description="Revisit selected archive pages regardless of stored coverage.")] = False,
     ) -> str:
         job = enqueue_listserv_sync(state.services.job_repo, list_id, date, force)
-        return _listserv_job_result(job)
+        return _job_result(job, "queued listserv_sync")
 
     @server.tool(
         name="listserv_parse",
@@ -1224,7 +1219,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
         force: Annotated[bool, Field(description="Reparse already-parsed selected messages.")] = False,
     ) -> str:
         job = enqueue_listserv_parse(state.services.job_repo, list_id, date, force)
-        return _listserv_job_result(job)
+        return _job_result(job, "queued listserv_parse")
 
     @server.tool(
         name="listserv_list",
@@ -1317,7 +1312,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
             resume=resume,
             stale_only=stale_only,
         )
-        return _listserv_job_result(job)
+        return _job_result(job, "queued listserv_index")
 
     _reject_unknown_search_arguments(server)
     return server

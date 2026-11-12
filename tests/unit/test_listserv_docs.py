@@ -59,6 +59,7 @@ def test_cli_guide_documents_sync() -> None:
 
 def test_mcp_enqueue_result_documents_exact_response_fields() -> None:
     text = Path("docs/mcp.md").read_text(encoding="utf-8")
+    normalized_text = " ".join(text.split())
     listserv_section = text.split("### LISTSERV archives", 1)[1].split(
         "## Jobs", 1
     )[0]
@@ -68,12 +69,27 @@ def test_mcp_enqueue_result_documents_exact_response_fields() -> None:
     )
 
     assert result_contract is not None
-    assert result_contract.group(1) == "`job_id`, `status`, and `url`"
     assert (
-        "Mutation results include `job_id`, `status`, `message`, and `links`"
-        not in normalized
+        result_contract.group(1)
+        == "`job_id`, `status`, `message`, and `links`"
     )
-    assert "Other mutation tools enqueue durable work" in text
+    assert (
+        "`links` contains the job-detail `self` link and the SSE `events` link"
+        in normalized
+    )
+    assert (
+        "LISTSERV enqueue tools use the distinct `job_id`/`status`/`url` contract"
+        not in normalized_text
+    )
+    assert (
+        "MCP enqueue tools create durable work rather than blocking on downloads/parsing."
+        in normalized_text
+    )
+    assert (
+        "Their returned JSON uses the same `job_id`, `status`, `message`, and `links` "
+        "shape, including the LISTSERV enqueue tools."
+        in normalized_text
+    )
 
 
 def test_listserv_guides_cover_the_public_contract() -> None:

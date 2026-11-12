@@ -913,7 +913,7 @@ def test_ordering_timezones_fallbacks_equal_score_ties_and_pagination(
     m_naive = _make_message(
         "https://list.etsi.org/msg/naive",
         subject="tz-order",
-        dt=datetime(2026, 10, 1, 15, 0, 0),  # noqa: DTZ001
+        dt=datetime(2026, 10, 1, 15, 0, 0),
         date_precision="datetime",
         subject_tdocs=(),
     )
@@ -921,14 +921,14 @@ def test_ordering_timezones_fallbacks_equal_score_ties_and_pagination(
     m_day_b = _make_message(
         "https://list.etsi.org/msg/day-b",
         subject="tz-order",
-        dt=datetime(2026, 10, 1, 0, 0, 0),  # noqa: DTZ001
+        dt=datetime(2026, 10, 1, 0, 0, 0),
         date_precision="date",
         subject_tdocs=(),
     )
     m_day_a = _make_message(
         "https://list.etsi.org/msg/day-a",
         subject="tz-order",
-        dt=datetime(2026, 10, 1, 0, 0, 0),  # noqa: DTZ001
+        dt=datetime(2026, 10, 1, 0, 0, 0),
         date_precision="date",
         subject_tdocs=(),
     )

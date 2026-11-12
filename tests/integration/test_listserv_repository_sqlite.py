@@ -422,12 +422,12 @@ def test_datetime_roundtrip_and_local_date_filtering_and_ordering(
     )
     m_naive = _make_message(
         "https://list.etsi.org/msg/naive",
-        dt=datetime(2026, 10, 1, 15, 45, 0),  # noqa: DTZ001
+        dt=datetime(2026, 10, 1, 15, 45, 0),
         date_precision="datetime",
     )
     m_date_only = _make_message(
         "https://list.etsi.org/msg/date-only",
-        dt=datetime(2026, 10, 1, 0, 0, 0),  # noqa: DTZ001
+        dt=datetime(2026, 10, 1, 0, 0, 0),
         date_precision="date",
     )
     repo.commit_page(

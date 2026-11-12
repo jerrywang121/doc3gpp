@@ -100,7 +100,7 @@ def _parse_date_cell(value: object) -> date | None:
 
     for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
         try:
-            return datetime.strptime(text, fmt).date()  # noqa: DTZ007
+            return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
 

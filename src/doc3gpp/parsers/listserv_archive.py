@@ -215,7 +215,7 @@ def _parse_message_date(raw_text: str) -> tuple[datetime, DatePrecision]:
             d = date.fromisoformat(cleaned)
         except ValueError as exc:
             raise ListservArchiveParseError(f"Invalid ISO date {cleaned!r}: {exc}") from exc
-        return datetime(d.year, d.month, d.day), "date"  # noqa: DTZ001
+        return datetime(d.year, d.month, d.day), "date"
 
     dmy_match = _HUMAN_DMY_DATE_ONLY_RE.match(cleaned)
     if dmy_match:
@@ -231,7 +231,7 @@ def _parse_message_date(raw_text: str) -> tuple[datetime, DatePrecision]:
                 raise ListservArchiveParseError(
                     f"Invalid calendar date {cleaned!r}: {exc}"
                 ) from exc
-            return datetime(d.year, d.month, d.day), "date"  # noqa: DTZ001
+            return datetime(d.year, d.month, d.day), "date"
 
     mdy_match = _HUMAN_MDY_DATE_ONLY_RE.match(cleaned)
     if mdy_match:
@@ -247,7 +247,7 @@ def _parse_message_date(raw_text: str) -> tuple[datetime, DatePrecision]:
                 raise ListservArchiveParseError(
                     f"Invalid calendar date {cleaned!r}: {exc}"
                 ) from exc
-            return datetime(d.year, d.month, d.day), "date"  # noqa: DTZ001
+            return datetime(d.year, d.month, d.day), "date"
 
     if _ISO_DATETIME_PREFIX_RE.match(cleaned):
         iso_candidate = _normalize_iso_datetime_str(cleaned)
@@ -266,7 +266,7 @@ def _parse_message_date(raw_text: str) -> tuple[datetime, DatePrecision]:
 
     for fmt in ("%d %b %Y %H:%M:%S", "%d %b %Y %H:%M", "%d %B %Y %H:%M:%S", "%d %B %Y %H:%M"):
         try:
-            return datetime.strptime(cleaned, fmt), "datetime"  # noqa: DTZ007
+            return datetime.strptime(cleaned, fmt), "datetime"
         except ValueError:
             continue
 

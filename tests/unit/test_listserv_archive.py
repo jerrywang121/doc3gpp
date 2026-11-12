@@ -127,7 +127,7 @@ def test_archive_page_parses_messages_timezones_precision_tdocs_and_pagination(
     assert second.url == "https://list.etsi.org/scripts/wa.exe?A2=ind2610A&L=EXAMPLE&P=2"
     assert second.subject == "Re: 会議 agenda update R4-2607922"
     assert second.sender == "WG Chair <[log in to unmask]>"
-    assert second.date == datetime(2026, 10, 2, 14, 5, 9)  # noqa: DTZ001
+    assert second.date == datetime(2026, 10, 2, 14, 5, 9)
     assert second.date.tzinfo is None
     assert second.date_precision == "datetime"
     assert second.week == "2026-10-W1"
@@ -137,7 +137,7 @@ def test_archive_page_parses_messages_timezones_precision_tdocs_and_pagination(
     assert third.url == "https://list.etsi.org/scripts/wa.exe?A2=ind2610A&L=EXAMPLE&P=3"
     assert third.subject == "Draft schedule notice"
     assert third.sender == "[log in to unmask]"
-    assert third.date == datetime(2026, 10, 3, 0, 0, 0)  # noqa: DTZ001
+    assert third.date == datetime(2026, 10, 3, 0, 0, 0)
     assert third.date.tzinfo is None
     assert third.date_precision == "date"
     assert third.week == "2026-10-W1"
@@ -168,7 +168,7 @@ def test_archive_page_month_only_derives_week_buckets_w1_to_w5(
         "2023-04-W5",
     ]
     msg_apr_29 = messages[-1]
-    assert msg_apr_29.date == datetime(2023, 4, 29, 0, 0, 0)  # noqa: DTZ001
+    assert msg_apr_29.date == datetime(2023, 4, 29, 0, 0, 0)
     assert msg_apr_29.date_precision == "date"
     assert msg_apr_29.week == "2023-04-W5"
     assert msg_apr_29.subject_tdocs == ("RP-2309999",)
@@ -298,6 +298,6 @@ def test_archive_page_supports_rfc2822_and_human_dates_and_preserves_weekly_peri
     assert messages[0].date_precision == "datetime"
     assert messages[0].week == "2026-04-W5"
 
-    assert messages[1].date == datetime(2026, 5, 2, 0, 0, 0)  # noqa: DTZ001
+    assert messages[1].date == datetime(2026, 5, 2, 0, 0, 0)
     assert messages[1].date_precision == "date"
     assert messages[1].week == "2026-04-W5"

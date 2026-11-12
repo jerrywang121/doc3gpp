@@ -330,7 +330,7 @@ def _decompose_message_datetime(
 ) -> tuple[datetime, date, int | None, datetime]:
     """Extract ``(local_datetime, local_date, tz_offset_seconds, sort_timestamp)``."""
     if precision == "date":
-        local_dt = datetime(dt.year, dt.month, dt.day, 0, 0, 0)  # noqa: DTZ001
+        local_dt = datetime(dt.year, dt.month, dt.day, 0, 0, 0)
         return local_dt, local_dt.date(), None, local_dt
 
     offset = dt.utcoffset() if dt.tzinfo is not None else None

@@ -22,7 +22,13 @@
     {% elif record.attachments %}
       <ul>
         {% for attachment in record.attachments %}
-          <li><span>{{ attachment.name }}</span> · <code>{{ attachment.url }}</code></li>
+          <li><span>{{ attachment.name }}</span> ·
+            {% if attachment.url.lower().startswith("http://") or attachment.url.lower().startswith("https://") %}
+              <a href="{{ attachment.url }}"><code>{{ attachment.url }}</code></a>
+            {% else %}
+              <code>{{ attachment.url }}</code>
+            {% endif %}
+          </li>
         {% endfor %}
       </ul>
     {% else %}

@@ -78,6 +78,10 @@ def client(sqlite_env, disable_auto_sync, monkeypatch) -> TestClient:
                     name="<script>attachment</script>",
                     url="javascript:alert(2)",
                 ),
+                ListservAttachment(
+                    name="R1-2610793_report.zip",
+                    url="https://list.etsi.org/attachments/report.zip",
+                ),
             ),
             tdocs=("R1-2610793",),
             content=(
@@ -161,6 +165,18 @@ def test_listserv_show_escapes_upstream_values_and_preserves_parse_states(
     assert nonstandard_port.status_code == 200
     assert 'href="https://list.etsi.org:8443/' not in nonstandard_port.text
     assert "https://list.etsi.org:8443/" in nonstandard_port.text
+
+
+def test_listserv_show_links_safe_attachment_urls_but_leaves_unsafe_schemes_unlinked(
+    client: TestClient,
+) -> None:
+    response = client.get("/listserv/show", params={"url": PARSED_URL})
+
+    assert response.status_code == 200, response.text
+    safe_url = "https://list.etsi.org/attachments/report.zip"
+    assert f'<a href="{safe_url}"><code>{safe_url}</code></a>' in response.text
+    assert "<code>javascript:alert(2)</code>" in response.text
+    assert 'href="javascript:' not in response.text
 
 
 def test_listserv_ui_uses_shared_job_endpoints_and_payload_modes(

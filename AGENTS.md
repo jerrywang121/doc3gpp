@@ -113,6 +113,7 @@ lxml, openpyxl. Optional CLI/extraction/semantic/web extras are described in
 [config.md](docs/config.md#optional-dependencies). `[dev]` alone does not include
 every extraction/vector dependency. Tests import `src` and exclude online by
 default; the script uses xdist when installed (`-n 0` forces sequential).
+Run test with xdist when possible, only use sequential on targeted fail tests.
 
 Use shared test fixtures to clear cached settings and all relevant engines.
 Mock auto-sync transports to avoid unintended network calls. Do not claim

@@ -123,6 +123,16 @@ def test_listserv_page_renders_filters_preview_truncation_and_pagination(
     )
 
     assert response.status_code == 200
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    results = soup.select_one("#listserv-results ul.listserv-results")
+    pagination = soup.select_one("#listserv-results nav.pagination")
+    assert results is not None
+    assert pagination is not None
+    assert pagination.find_next_sibling("ul", class_="listserv-results") is results
+
     assert LIST_ID in response.text
     assert "Alice &lt;alice@example.test&gt;" in response.text
     assert 'action="/api/listserv/sync"' in response.text

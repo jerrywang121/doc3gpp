@@ -28,7 +28,7 @@ function makeTarget() {
   };
 }
 
-function makeForm({ id, action, listId, dates, checked, batch }) {
+function makeForm({ id, action, listId, since, until, checked, batch }) {
   const handlers = {};
   const classes = new Set();
   const target = makeTarget();
@@ -39,7 +39,8 @@ function makeForm({ id, action, listId, dates, checked, batch }) {
   };
   const controls = {
     list_id: { value: listId },
-    dates: { value: dates },
+    since: { value: since },
+    until: { value: until },
     batch: { value: batch },
   };
   for (const [name, value] of Object.entries(checked)) {
@@ -71,9 +72,6 @@ function makeForm({ id, action, listId, dates, checked, batch }) {
       if (selector === ".sync-queued") {
         return queued;
       }
-      if (selector === '[name="dates"]') {
-        return controls.dates;
-      }
       const inputMatch = selector.match(/^input\[name="([^"]+)"\]$/);
       return inputMatch ? controls[inputMatch[1]] || null : null;
     },
@@ -87,7 +85,8 @@ function makeScenario(readyState) {
       id: "listserv-sync-form",
       action: "/api/listserv/sync",
       listId: "TEAM_A",
-      dates: " \n >= 2026-10-01 \r\n \t \n <= 2026-10-31 \n",
+      since: " 2026-10-01 ",
+      until: " 2026-10-31 ",
       checked: { force: true },
       batch: "",
     }),
@@ -95,7 +94,8 @@ function makeScenario(readyState) {
       id: "listserv-parse-form",
       action: "/api/listserv/parse",
       listId: "TEAM_X",
-      dates: "= 2026-10-05\n  \n < 2026-10-20 \t",
+      since: "  ",
+      until: " 2026-10-20 \t",
       checked: { force: false },
       batch: "",
     }),
@@ -103,7 +103,8 @@ function makeScenario(readyState) {
       id: "listserv-index-form",
       action: "/api/listserv/index",
       listId: "",
-      dates: "",
+      since: "",
+      until: "",
       checked: {
         rebuild: true,
         rebuild_embeddings: false,
@@ -224,7 +225,7 @@ async function runScenario(readyState) {
   assert.strictEqual(scenario.requests[1].url, "/api/listserv/parse");
   assert.deepStrictEqual(bodyOf(scenario.requests[1]), {
     list_id: "TEAM_X",
-    dates: ["= 2026-10-05", "< 2026-10-20"],
+    dates: ["<= 2026-10-20"],
     force: false,
   });
   assert.strictEqual(scenario.requests[2].url, "/api/listserv/index");
@@ -237,14 +238,27 @@ async function runScenario(readyState) {
     batch: 12,
   });
 
+  // Empty date bounds remain an unrestricted date selection.
+  sync.elements.since.value = " \n\t";
+  sync.elements.until.value = "  ";
+  submit(sync);
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  assert.strictEqual(scenario.requests.length, 4);
+  assert.strictEqual(scenario.requests[3].url, "/api/listserv/sync");
+  assert.deepStrictEqual(bodyOf(scenario.requests[3]), {
+    list_id: "TEAM_A",
+    dates: [],
+    force: true,
+  });
+
   // A second index submission verifies that an empty batch is omitted rather
   // than sent as an empty string or zero.
   index.elements.batch.value = "  ";
   submit(index);
   await new Promise(function (resolve) { setImmediate(resolve); });
-  assert.strictEqual(scenario.requests.length, 4);
-  assert.strictEqual(scenario.requests[3].url, "/api/listserv/index");
-  assert.deepStrictEqual(bodyOf(scenario.requests[3]), {
+  assert.strictEqual(scenario.requests.length, 5);
+  assert.strictEqual(scenario.requests[4].url, "/api/listserv/index");
+  assert.deepStrictEqual(bodyOf(scenario.requests[4]), {
     rebuild: true,
     rebuild_embeddings: false,
     rebuild_all: true,
@@ -252,22 +266,25 @@ async function runScenario(readyState) {
     stale_only: true,
   });
   assert.strictEqual(
-    Object.prototype.hasOwnProperty.call(bodyOf(scenario.requests[3]), "batch"),
+    Object.prototype.hasOwnProperty.call(bodyOf(scenario.requests[4]), "batch"),
     false
   );
 
+  assert.deepStrictEqual(
+    sync.target.appended.map(function (node) { return node.attrs["hx-get"]; }),
+    ["/jobs/job-1?format=html", "/jobs/job-4?format=html"]
+  );
+  assert.deepStrictEqual(
+    parse.target.appended.map(function (node) { return node.attrs["hx-get"]; }),
+    ["/jobs/job-2?format=html"]
+  );
   for (const form of [sync, parse]) {
-    assert.strictEqual(form.target.appended.length, 1);
-    assert.strictEqual(
-      form.target.appended[0].attrs["hx-get"],
-      "/jobs/job-" + (form === sync ? "1" : "2") + "?format=html"
-    );
     assert.strictEqual(scenario.decoys.get(form.targetSelector).appended.length, 0);
   }
   assert.strictEqual(index.target.appended.length, 2);
   assert.deepStrictEqual(
     index.target.appended.map(function (node) { return node.attrs["hx-get"]; }),
-    ["/jobs/job-3?format=html", "/jobs/job-4?format=html"]
+    ["/jobs/job-3?format=html", "/jobs/job-5?format=html"]
   );
   assert.strictEqual(scenario.decoys.get(index.targetSelector).appended.length, 0);
 }

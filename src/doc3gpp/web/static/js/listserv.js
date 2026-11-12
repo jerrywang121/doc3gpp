@@ -7,14 +7,12 @@
   }
 
   function dateExpressions(form) {
-    var input = form.querySelector('[name="dates"]');
-    if (!input) {
-      return [];
-    }
-    return input.value
-      .split(/\r?\n/)
-      .map(function (value) { return value.trim(); })
-      .filter(Boolean);
+    var since = form.elements.since ? form.elements.since.value.trim() : "";
+    var until = form.elements.until ? form.elements.until.value.trim() : "";
+    return [
+      since ? ">= " + since : "",
+      until ? "<= " + until : "",
+    ].filter(Boolean);
   }
 
   function bind(form, buildBody) {

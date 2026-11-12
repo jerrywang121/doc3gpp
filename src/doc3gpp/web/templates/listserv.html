@@ -52,8 +52,11 @@
         <input type="text" name="list_id" list="listserv-list-id-suggestions"
                value="{{ list_ids[0] if list_ids else '' }}" required>
       </label>
-      <label>Date expressions (one per line, optional)
-        <textarea name="dates" rows="3"></textarea>
+      <label>Since
+        <input type="text" name="since" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Until
+        <input type="text" name="until" placeholder="YYYY-MM-DD">
       </label>
       <label class="inline-check"><input type="checkbox" name="force"> Force sync</label>
       <button type="submit" class="btn primary">Queue sync</button>
@@ -71,8 +74,11 @@
         <input type="text" name="list_id" list="listserv-list-id-suggestions"
                value="{{ list_ids[0] if list_ids else '' }}" required>
       </label>
-      <label>Date expressions (one per line, optional)
-        <textarea name="dates" rows="3"></textarea>
+      <label>Since
+        <input type="text" name="since" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Until
+        <input type="text" name="until" placeholder="YYYY-MM-DD">
       </label>
       <label class="inline-check"><input type="checkbox" name="force"> Force parse</label>
       <button type="submit" class="btn primary">Queue parse</button>

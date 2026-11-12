@@ -269,6 +269,9 @@ def test_empty_listserv_store_allows_entering_sync_and_parse_list_ids(
         form = response.text.split(f'id="{form_id}"', 1)[1].split("</form>", 1)[0]
         assert '<input type="text"' in form
         assert 'name="list_id"' in form
+        assert 'name="since"' in form
+        assert 'name="until"' in form
+        assert 'name="dates"' not in form
         assert "required" in form
 
 

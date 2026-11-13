@@ -44,6 +44,35 @@ def test_parse_item_portal_form(client):
     assert soup.select_one("#listserv-sync-form") and soup.select_one("#listserv-parse-form")
 
 
+def test_unparsed_search_results_offer_independent_item_parse_forms(client):
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(client.get("/listserv", params={"list_id": LIST_ID}).text, "html.parser")
+    cards = {card.h3.get_text(strip=True): card for card in soup.select("#listserv-results li.card")}
+    for subject, url in (("Unparsed topic", UNPARSED_URL), ("Nonstandard port", NONSTANDARD_PORT_URL)):
+        form = cards[subject].select_one('form[action="/api/listserv/parse-item"]')
+        assert form is not None
+        assert form.select_one('input[name="url"]')["value"] == url
+        assert form.select_one('button[type="submit"]').get_text(strip=True) == "Parse now"
+        assert form.select_one(f'#{form["id"]}-job-target') is not None
+        assert form.find_parent("form") is None
+    assert cards["Unparsed topic"].form["id"] != cards["Nonstandard port"].form["id"]
+    assert cards["Parsed empty"].select_one('form[action="/api/listserv/parse-item"]') is None
+    assert cards["<script>alert(1)</script> Topic"].select_one('form[action="/api/listserv/parse-item"]') is None
+
+
+def test_catalog_panel_collapses_and_opens_for_active_filters(client):
+    from bs4 import BeautifulSoup
+
+    page = BeautifulSoup(client.get("/listserv").text, "html.parser")
+    catalog = page.select_one("details#listserv-catalog")
+    assert catalog is not None and not catalog.has_attr("open")
+    assert catalog.select_one("summary").get_text(strip=True) == "List catalog"
+    assert catalog.select_one("ul.listserv-catalog-list") is not None
+    filtered = BeautifulSoup(client.get("/listserv", params={"catalog_tsg": "R1"}).text, "html.parser")
+    assert filtered.select_one("details#listserv-catalog").has_attr("open")
+
+
 def _message(url: str, subject: str, day: int) -> ListservMessage:
     return ListservMessage(
         url=url,

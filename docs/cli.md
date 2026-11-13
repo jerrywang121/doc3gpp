@@ -3397,6 +3397,8 @@ only message rows. It prints tab-separated `list_id`, `tsg`, and `description`
 columns in ID order; null metadata is shown as `-`. The catalog includes
 pre-seeded reference entries and lists discovered by sync or explicit item parsing, including entries
 that do not yet have stored messages.
+Use `--format json` for an array of objects with `list_id`, `tsg`, and
+`description`; missing metadata remains JSON `null`. The default is `table`.
 Optional `--list-id` and `--tsg` filters intersect and use the shared rich SQL
 LIKE grammar: plain values match exactly, `%` and `_` are wildcards, `!` negates
 a pattern, and `null` / `not-null` test SQL nullability. SQL negation does not
@@ -3417,6 +3419,7 @@ doc3gpp listserv parse-item 'https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RA
 # Stored-only reads and search modes (FTS, semantic, hybrid, filter-only).
 doc3gpp listserv list
 doc3gpp listserv list --list-id '%RAN%' --tsg 'R%'
+doc3gpp listserv list --tsg 'R%' --format json
 doc3gpp listserv search --list-id 3GPP_TSG_RAN_WG5 --tdocs '%R1-2610793%' --format json
 doc3gpp listserv search --text 'handover' --semantic 'mobility procedure' --limit 10
 # Replace the placeholder with an exact URL from a search result.

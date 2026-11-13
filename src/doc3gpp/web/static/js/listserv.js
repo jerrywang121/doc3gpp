@@ -25,6 +25,13 @@
     });
   }
 
+  function itemBody(form) {
+    return JSON.stringify({
+      url: form.elements.url.value,
+      force: checked(form, "force"),
+    });
+  }
+
   function init() {
     bind(document.getElementById("listserv-sync-form"), function (form) {
       return JSON.stringify({
@@ -40,11 +47,9 @@
         force: checked(form, "force"),
       });
     });
-    bind(document.getElementById("listserv-parse-item-form"), function (form) {
-      return JSON.stringify({
-        url: form.elements.url.value,
-        force: checked(form, "force"),
-      });
+    bind(document.getElementById("listserv-parse-item-form"), itemBody);
+    document.querySelectorAll(".listserv-result-parse-form").forEach(function (form) {
+      bind(form, itemBody);
     });
     bind(document.getElementById("listserv-index-form"), function (form) {
       var body = {

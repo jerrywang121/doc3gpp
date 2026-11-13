@@ -311,11 +311,14 @@ not the catalog record objects. Sync and parse forms still require one exact
 list ID.
 The parse-item form accepts an explicit detail URL and an optional force flag;
 like the other mutation forms, it starts a background job and reports progress.
-The separate catalog panel above message search has independent rich filters for
+Unparsed search results also offer **Parse now**, which queues that exact item
+without force and displays its job status; the page refreshes when the job ends.
+The collapsible catalog panel above message search has independent rich filters for
 list ID (`catalog_list_id`) and TSG (`catalog_tsg`). Its safe list-ID links open
 the corresponding public ETSI archive. Filtering the panel does not change the
 message search or restrict suggestions and job forms; search and pagination
-preserve the catalog filters.
+preserve the catalog filters. It opens automatically when catalog filters are
+active and shows entries in three columns on wide screens, fewer on narrow ones.
 `/listserv/show` takes the exact `url` query value. Its forms reuse these
 routes/jobs, and opening either page never syncs or parses. HTTP server
 authentication and job-queue deployment limitations remain as described above.

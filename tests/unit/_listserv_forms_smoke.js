@@ -107,6 +107,18 @@ function makeScenario(readyState) {
       url: "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;abc.2611B&S=",
       checked: { force: true },
     }),
+    row1: makeForm({
+      id: "listserv-result-parse-1",
+      action: "/api/listserv/parse-item",
+      url: "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;one&S=",
+      checked: {},
+    }),
+    row2: makeForm({
+      id: "listserv-result-parse-2",
+      action: "/api/listserv/parse-item",
+      url: "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;two&S=",
+      checked: {},
+    }),
     index: makeForm({
       id: "listserv-index-form",
       action: "/api/listserv/index",
@@ -164,6 +176,9 @@ function makeScenario(readyState) {
     },
     getElementById: function (id) { return formsById[id] || null; },
     querySelector: function (selector) { return decoys.get(selector) || null; },
+    querySelectorAll: function (selector) {
+      return selector === ".listserv-result-parse-form" ? [forms.row1, forms.row2] : [];
+    },
     createElement: function () {
       return {
         attrs: {},
@@ -303,6 +318,18 @@ async function runScenario(readyState) {
     force: true,
   });
   assert.strictEqual(item.target.appended[0].attrs["hx-get"], "/jobs/job-6?format=html");
+  submit(scenario.forms.row1);
+  submit(scenario.forms.row2);
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  assert.strictEqual(scenario.requests[6].url, "/api/listserv/parse-item");
+  assert.deepStrictEqual(bodyOf(scenario.requests[6]), {
+    url: "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;one&S=", force: false,
+  });
+  assert.deepStrictEqual(bodyOf(scenario.requests[7]), {
+    url: "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;two&S=", force: false,
+  });
+  assert.strictEqual(scenario.forms.row1.target.appended[0].attrs["hx-get"], "/jobs/job-7?format=html");
+  assert.strictEqual(scenario.forms.row2.target.appended[0].attrs["hx-get"], "/jobs/job-8?format=html");
   global.fetch = function () { return Promise.resolve({ ok: false, status: 400 }); };
   const originalError = console.error;
   console.error = function () {};

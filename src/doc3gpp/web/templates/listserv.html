@@ -24,8 +24,8 @@
     {% for list_id in list_ids %}<option value="{{ list_id }}">{% endfor %}
   </datalist>
 
-  <section class="card" id="listserv-catalog">
-    <h2>List catalog</h2>
+  <details class="card" id="listserv-catalog"{% if catalog_filters.list_id or catalog_filters.tsg %} open{% endif %}>
+    <summary>List catalog</summary>
     <form method="get" action="/listserv" class="filters">
       <label>List ID filter
         <input name="catalog_list_id" value="{{ catalog_filters.list_id or '' }}" placeholder="All lists or a rich filter">
@@ -42,13 +42,13 @@
       <button type="submit" class="btn primary">Filter lists</button>
     </form>
     {% if catalog_entries %}
-      <ul>
+      <ul class="listserv-catalog-list">
         {% for entry in catalog_entries %}
           <li>{% if entry.url %}<a href="{{ entry.url }}">{{ entry.item.list_id }}</a>{% else %}{{ entry.item.list_id }}{% endif %}{% if entry.item.tsg %} · {{ entry.item.tsg }}{% endif %}</li>
         {% endfor %}
       </ul>
     {% else %}<p>No stored lists match these filters.</p>{% endif %}
-  </section>
+  </details>
 
   <section class="card">
     <h2>Search stored messages</h2>

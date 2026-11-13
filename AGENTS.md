@@ -113,6 +113,9 @@ shared embedder. Close per-job source/index resources on their worker thread,
 then app facades after jobs drain and before the shared embedder. CLI and
 standalone callers close factory-built services they own; never close injected
 providers.
+The LISTSERV catalog CLI supports table and JSON output; the web catalog is
+collapsible, and unparsed result cards queue exact-item parse jobs through the
+shared polling flow.
 SQLite catalog upgrade cleanup may fail after commit: preserve the explicit
 `ListservCatalogUpgradeCommittedError` outcome and discard the connection;
 do not report that already-committed changes were rolled back.

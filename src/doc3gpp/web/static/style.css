@@ -155,6 +155,32 @@ tr.preview-row td {
   margin-top: 0;
 }
 
+#listserv-catalog summary {
+  cursor: pointer;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+#listserv-catalog[open] summary {
+  margin-bottom: 1rem;
+}
+
+.listserv-catalog-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem 1rem;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .listserv-catalog-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .listserv-catalog-list { grid-template-columns: 1fr; }
+}
+
 dl.kv {
   display: grid;
   grid-template-columns: max-content 1fr;

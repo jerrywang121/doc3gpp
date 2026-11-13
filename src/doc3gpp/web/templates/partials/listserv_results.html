@@ -18,6 +18,12 @@
           <p>TDocs: {{ hit.tdocs|join(", ") if hit.tdocs else "None" }}</p>
           {% if hit.content_preview is none %}
             <p>Message content has not been parsed.</p>
+            <form id="listserv-result-parse-{{ loop.index }}" class="listserv-result-parse-form" method="post" action="/api/listserv/parse-item">
+              <input type="hidden" name="url" value="{{ hit.url }}">
+              <button type="submit" class="btn">Parse now</button>
+              <span class="sync-queued" data-label="Item parse job queued" style="display:none">Item parse job queued</span>
+              <div id="listserv-result-parse-{{ loop.index }}-job-target"></div>
+            </form>
           {% else %}
             <pre>{{ hit.content_preview }}</pre>
             {% if hit.preview_truncated %}<p class="meta">Preview truncated to 200 characters.</p>{% endif %}

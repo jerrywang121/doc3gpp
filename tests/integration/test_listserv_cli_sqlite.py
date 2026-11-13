@@ -93,6 +93,28 @@ def test_list_returns_distinct_ids(stored):
     assert ["LEGACY_NULL_LIST", "-", "-"] in rows
 
 
+def test_catalog_list_json_filters_and_null_metadata(stored):
+    import json
+
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
+
+    result = runner.invoke(app, ["listserv", "list", "--format", "json", "--list-id", "LEGACY%", "--tsg", "null"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == [
+        {"list_id": "LEGACY_NULL_LIST", "tsg": None, "description": None}
+    ]
+    empty = runner.invoke(app, ["listserv", "list", "--format", "json", "--list-id", "NO_SUCH_LIST"])
+    assert empty.exit_code == 0, empty.output
+    assert json.loads(empty.output) == []
+    invalid = runner.invoke(app, ["listserv", "list", "--format", "csv"])
+    assert invalid.exit_code != 0
+
+
 def test_catalog_list_cli_filters_and_help(stored):
     from doc3gpp.storage.db.models import ListservListORM
     from doc3gpp.storage.db.session import get_session_factory

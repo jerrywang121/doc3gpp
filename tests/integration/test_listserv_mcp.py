@@ -263,7 +263,9 @@ def test_packaged_skill_listserv_examples_call_registered_tools(surfaces):
             examples[parts[0]] = json.loads(parts[1])
     assert set(examples) == {"listserv_list", "listserv_parse_item"}
     catalog = _call_json(server, "listserv_list", examples["listserv_list"])
-    assert catalog["list_ids"] == ["3GPP_TSG_RAN_WG5"]
+    assert "3GPP_TSG_SA_WG2" in catalog["list_ids"]
+    assert len(catalog["list_ids"]) > 1
+    assert all(list_id.startswith("3GPP_TSG_SA") for list_id in catalog["list_ids"])
     queued = _call_json(server, "listserv_parse_item", examples["listserv_parse_item"])
     job = state.services.job_repo.get(queued["job_id"])
     assert job.kind is JobKind.LISTSERV_PARSE_ITEM

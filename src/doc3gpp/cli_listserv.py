@@ -153,14 +153,21 @@ def listserv_parse_item(
 def listserv_list(
     list_id: str | None = typer.Option(None, "--list-id", help=f"Rich LIKE filter on list ID. {_RICH_FILTER_HELP}"),
     tsg: str | None = typer.Option(None, "--tsg", help=f"Rich LIKE filter on TSG. {_RICH_FILTER_HELP}"),
+    fmt: str = typer.Option("table", "--format", help="Output format: table or json."),
 ) -> None:
     """List LISTSERV catalog entries and their TSG and description."""
+    from doc3gpp.models.listserv_payloads import listserv_lists_payload
     from doc3gpp.services.factory import build_listserv_service
     from doc3gpp.storage.db.migrate import create_schema
 
+    fmt = _check_format(fmt)
     create_schema("main")
+    items = build_listserv_service().list_lists(list_id=list_id, tsg=tsg)
+    if fmt == "json":
+        typer.echo(json.dumps(listserv_lists_payload(items)["lists"], ensure_ascii=False, indent=2))
+        return
     typer.echo("list_id\ttsg\tdescription")
-    for item in build_listserv_service().list_lists(list_id=list_id, tsg=tsg):
+    for item in items:
         typer.echo(
             "\t".join(
                 value if value is not None else "-"

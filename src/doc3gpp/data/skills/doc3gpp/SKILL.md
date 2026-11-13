@@ -244,8 +244,6 @@ Each result contains nested `statuses` entries with `path`, `gcf_ptcrb`, and `tt
 LISTSERV list contains public email archive messages.
 
 1. Use `listserv_list` to discover known 3GPP list IDs, and their mapping TSG WG.
-   Optional `list_id` and `tsg` filters intersect and support rich SQL LIKE
-   patterns (`%`, `_`, `!`, `null`, `not-null`). The catalog is not exhaustive.
 2. Use `listserv_sync` to fetch email items (messages) for a sepcific list ID, during a time period.
    sync only fetch message metadata, inlucde subject, sender, timestamp, its unique `url`.
    For getting messages on a target TSG WG, use the corresponding list ID.
@@ -253,22 +251,18 @@ LISTSERV list contains public email archive messages.
    sync again to get newly added messages.
 3. Use `listserv_parse` for the same list to fetch details of already synced messages.
    parse get the email text content, attachement list (names and urls), and extracted
-   list of TDocs (comma-delimited string) it mentioned in the email.
+   list of TDocs (comma-delimited list) it mentioned in the email.
    Attachment names and URLs are metadata only; this app never fetches
    attachment bytes.
-   If you already have a public A2 item URL, `listserv_parse_item` can instead
-   parse that single message even if its list or message was not synced. The
-   empty `&S=` suffix is optional; existing parsed details are skipped unless
-   `force` is true. Successful parsing registers an unknown list and stores the
-   message and detail atomically without syncing or creating archive coverage.
+   Use `listserv_parse_item` to parse a single message with its unique `url`.
 4. Use `listserv_search` to search stored (synced) email items.
    Three types search are supported, which can be combined if the corresonding args given.
      - full text (--text, with fts5 search syntax)
       - vector/embeding search (--semantic, free text like native question)
       - field filter (--<field>, with enriched SQL LIKE style)
-   For `tdocs`, stored IDs are comma-delimited; use a contains pattern like
+   For `tdocs`, which stored comma-delimited Tdoc IDs, use SQL LIKE pattern e.g.
    `"%R1-2610793%"` to match one ID within a multi-ID value.
-    search returns message metadata, and if parsed, their TDocs and contents preview (200 chars).
+   The search returns message metadata, and if parsed, their TDocs and contents preview (200 chars).
 5. Use `listserv_show` with a message's unique `url` to get its full content and attachemnt list.
    a return field `content_truncated` indicates if the parsed content is truncated, in which case
    you need to use `url` to directly web fetch online to get the full content.
@@ -276,15 +270,15 @@ LISTSERV list contains public email archive messages.
 Examples:
 
 ```text
-# discover a specific list in the catalog
-listserv_list         {"list_id":"3GPP_TSG_RAN_WG5","tsg":"R5"}
+# discover possible 3GPP SA email list in the catalog
+listserv_list         {"list_id":"3GPP_TSG_SA%"}
 # sync messages meta for RAN5 meeting
 listserv_sync         {"list_id":"3GPP_TSG_RAN_WG5","date":[">= 2026-10-01","<= 2026-10-31"]}
 get_job               {"job_id":"<sync job_id>"}  # poll until terminal
 # parse message detail
 listserv_parse        {"list_id":"3GPP_TSG_RAN_WG5","date":[">= 2026-10-01","<= 2026-10-31"]}
 get_job               {"job_id":"<parse job_id>"} # poll until terminal
-# parse one explicit public item and poll its job
+# parse one explicit email item with its url, and poll its job
 listserv_parse_item   {"url":"https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=","force":true}
 get_job               {"job_id":"<parse-item job_id>"}
 # search for R1-2610793 and AI in lists matching the RAN WG pattern

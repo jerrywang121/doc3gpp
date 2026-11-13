@@ -36,6 +36,45 @@ def repo(sqlite_env) -> ListservRepository:
     return SQLAlchemyListservRepository()
 
 
+def test_catalog_filter_rich_sql_like_and_intersection(repo: ListservRepository) -> None:
+    from doc3gpp.services.listserv_service import ListservService
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    with get_session_factory()() as session:
+        session.add_all(
+            [
+                ListservListORM(list_id="CATTEST_A", tsg="R1"),
+                ListservListORM(list_id="CATTEST_B", tsg="R2"),
+                ListservListORM(list_id="CATTEST_NULL", tsg=None),
+            ]
+        )
+        session.commit()
+
+    def ids(rows):
+        return [row.list_id for row in rows]
+
+    assert ids(repo.list_lists(list_id="CATTEST%", tsg="R1")) == ["CATTEST_A"]
+    assert ids(repo.list_lists(list_id="CATTEST%", tsg="!R1")) == ["CATTEST_B"]
+    assert ids(repo.list_lists(list_id="CATTEST%", tsg="null")) == ["CATTEST_NULL"]
+    assert ids(repo.list_lists(list_id="CATTEST%", tsg="not-null")) == [
+        "CATTEST_A", "CATTEST_B"
+    ]
+    assert ids(repo.list_lists(list_id="CATTEST__", tsg="R_")) == [
+        "CATTEST_A", "CATTEST_B"
+    ]
+    assert ids(repo.list_lists(list_id="CATTEST_A")) == ["CATTEST_A"]
+    assert repo.list_lists(list_id="CATTEST_A", tsg="R2") == []
+    assert repo.list_lists(list_id="CATTEST%' OR 1=1 --") == []
+    assert repo.list_lists(list_id="null") == []
+    all_ids = ids(repo.list_lists())
+    assert all_ids == sorted(all_ids)
+    assert repo.list_ids() == all_ids
+    assert ids(ListservService(repo).list_lists(list_id="CATTEST%", tsg="R1")) == [
+        "CATTEST_A"
+    ]
+
+
 def _make_message(
     url: str = "https://list.etsi.org/scripts/wa.exe?A2=ind2610A&L=3GPP_TSG_RAN_WG1&P=1",
     *,
@@ -57,6 +96,123 @@ def _make_message(
         week=week,
         subject_tdocs=subject_tdocs,
     )
+
+
+def _parsed_item_detail(url: str, content: str = "Body") -> ListservDetail:
+    return ListservDetail(
+        url=url,
+        attachments=(),
+        tdocs=(),
+        content=content,
+        content_truncated=False,
+        parser_version="1",
+        parsed_at=datetime(2026, 10, 2, tzinfo=timezone.utc),
+    )
+
+
+def test_parsed_item_creates_catalog_and_detail_without_archive_coverage(
+    repo: ListservRepository,
+) -> None:
+    from sqlalchemy import func, select
+
+    from doc3gpp.storage.db.models import ListservArchivePageORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    list_id = "3GPP_TSG_RAN_WG2_PARSE_TEST"
+    url = f"https://list.etsi.org/scripts/wa.exe?A2={list_id};abc.2610A&S="
+    message = _make_message(url, list_id=list_id)
+    detail = _parsed_item_detail(url)
+    repo.save_parsed_item(message, detail)
+
+    catalog = repo.list_lists(list_id=list_id)
+    assert len(catalog) == 1 and catalog[0].tsg == "R2"
+    record = repo.get(url)
+    assert record is not None and record.message == message and record.detail == detail
+    assert record.source_revision == 2
+    with get_session_factory()() as session:
+        assert session.scalar(select(func.count()).select_from(ListservArchivePageORM)) == 0
+
+    repo.save_parsed_item(_make_message(url, list_id=list_id, subject="Do not overwrite"), detail)
+    unchanged = repo.get(url)
+    assert unchanged is not None and unchanged.message == message and unchanged.source_revision == 2
+    repo.save_parsed_item(message, _parsed_item_detail(url, "Changed body"))
+    changed = repo.get(url)
+    assert changed is not None and changed.source_revision == 3
+
+
+def test_parsed_item_preserves_catalog_metadata(repo: ListservRepository) -> None:
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    list_id = "3GPP_TSG_RAN_WG2_EXISTING_TEST"
+    url = f"https://list.etsi.org/scripts/wa.exe?A2={list_id};abc.2610A&S="
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id=list_id, tsg="R1", description="Keep this"))
+        session.commit()
+    repo.save_parsed_item(_make_message(url, list_id=list_id), _parsed_item_detail(url))
+    row = repo.list_lists(list_id=list_id)[0]
+    assert (row.tsg, row.description) == ("R1", "Keep this")
+
+
+def test_parsed_item_unknown_tsg_remains_null(repo: ListservRepository) -> None:
+    list_id = "3GPP_TSG_RAN_WG99_UNKNOWN"
+    url = f"https://list.etsi.org/scripts/wa.exe?A2={list_id};abc.2610A&S="
+    repo.save_parsed_item(_make_message(url, list_id=list_id), _parsed_item_detail(url))
+    assert repo.list_lists(list_id=list_id)[0].tsg is None
+
+
+def test_parsed_item_rolls_back_new_and_existing_records(
+    repo: ListservRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    list_id = "3GPP_TSG_RAN_WG2_ROLLBACK_TEST"
+    url = f"https://list.etsi.org/scripts/wa.exe?A2={list_id};abc.2610A&S="
+    message = _make_message(url, list_id=list_id)
+    detail = _parsed_item_detail(url)
+
+    def fail_after_flush(session, _detail):
+        session.flush()
+        raise RuntimeError("forced transaction failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(repo, "_save_detail", fail_after_flush, raising=False)
+        with pytest.raises(RuntimeError, match="forced transaction failure"):
+            repo.save_parsed_item(message, detail)
+    assert not repo.has_list(list_id)
+    assert repo.get(url) is None
+
+    repo.save_parsed_item(message, detail)
+    before = repo.get(url)
+    with monkeypatch.context() as patch:
+        patch.setattr(repo, "_save_detail", fail_after_flush)
+        with pytest.raises(RuntimeError, match="forced transaction failure"):
+            repo.save_parsed_item(message, _parsed_item_detail(url, "Changed"))
+    assert repo.get(url) == before
+
+
+def test_parsed_item_rejects_mismatched_urls_before_writes(repo: ListservRepository) -> None:
+    list_id = "3GPP_TSG_RAN_WG2_MISMATCH_TEST"
+    url = f"https://list.etsi.org/scripts/wa.exe?A2={list_id};abc.2610A&S="
+    with pytest.raises(ValueError):
+        repo.save_parsed_item(_make_message(url, list_id=list_id), _parsed_item_detail(url + "x"))
+    assert not repo.has_list(list_id)
+    assert repo.get(url) is None
+
+
+def test_parsed_item_sync_preserves_suffixless_key_and_detail(repo: ListservRepository) -> None:
+    list_id = "3GPP_TSG_RAN_WG2_ALIAS_TEST"
+    suffixless = f"https://list.etsi.org/scripts/wa.exe?A2={list_id};abc.2610A"
+    canonical = suffixless + "&S="
+    page = ArchivePage(list_id=list_id, url="https://list.etsi.org/page", period="2026-10-W1")
+    repo.commit_page(page, [_make_message(suffixless, list_id=list_id)], DateSet(), ())
+    repo.save_detail(_parsed_item_detail(suffixless))
+    repo.commit_page(
+        page, [_make_message(canonical, list_id=list_id, subject="Updated by sync")], DateSet(), ()
+    )
+    record = repo.get(suffixless)
+    assert record is not None and record.message.subject == "Updated by sync"
+    assert record.detail is not None and record.detail.content == "Body"
+    assert record.source_revision == 3
+    assert repo.get(canonical) is None
 
 
 def test_empty_page_coverage_and_next_urls(repo: ListservRepository) -> None:

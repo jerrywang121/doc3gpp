@@ -28,7 +28,7 @@ function makeTarget() {
   };
 }
 
-function makeForm({ id, action, listId, since, until, checked, batch }) {
+function makeForm({ id, action, listId, url, since, until, checked, batch }) {
   const handlers = {};
   const classes = new Set();
   const target = makeTarget();
@@ -39,6 +39,7 @@ function makeForm({ id, action, listId, since, until, checked, batch }) {
   };
   const controls = {
     list_id: { value: listId },
+    url: { value: url },
     since: { value: since },
     until: { value: until },
     batch: { value: batch },
@@ -54,6 +55,7 @@ function makeForm({ id, action, listId, since, until, checked, batch }) {
     target,
     targetSelector: "#" + id + "-job-target",
     elements: controls,
+    queued,
     classList: {
       add: function (name) { classes.add(name); },
       remove: function (name) { classes.delete(name); },
@@ -98,6 +100,12 @@ function makeScenario(readyState) {
       until: " 2026-10-20 \t",
       checked: { force: false },
       batch: "",
+    }),
+    item: makeForm({
+      id: "listserv-parse-item-form",
+      action: "/api/listserv/parse-item",
+      url: "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;abc.2611B&S=",
+      checked: { force: true },
     }),
     index: makeForm({
       id: "listserv-index-form",
@@ -209,7 +217,7 @@ async function runScenario(readyState) {
     assert.strictEqual(scenario.getDOMContentLoaded(), null);
   }
 
-  const { sync, parse, index } = scenario.forms;
+  const { sync, parse, index, item } = scenario.forms;
   submit(sync);
   submit(parse);
   submit(index);
@@ -287,6 +295,22 @@ async function runScenario(readyState) {
     ["/jobs/job-3?format=html", "/jobs/job-5?format=html"]
   );
   assert.strictEqual(scenario.decoys.get(index.targetSelector).appended.length, 0);
+  submit(item);
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  assert.strictEqual(scenario.requests[5].url, "/api/listserv/parse-item");
+  assert.deepStrictEqual(bodyOf(scenario.requests[5]), {
+    url: "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;abc.2611B&S=",
+    force: true,
+  });
+  assert.strictEqual(item.target.appended[0].attrs["hx-get"], "/jobs/job-6?format=html");
+  global.fetch = function () { return Promise.resolve({ ok: false, status: 400 }); };
+  const originalError = console.error;
+  console.error = function () {};
+  submit(item);
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  console.error = originalError;
+  assert.strictEqual(item.queued.textContent, "Failed to enqueue job");
+  assert.strictEqual(item.classList.contains("job-busy"), false);
 }
 
 async function main() {

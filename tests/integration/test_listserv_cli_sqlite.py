@@ -93,6 +93,30 @@ def test_list_returns_distinct_ids(stored):
     assert ["LEGACY_NULL_LIST", "-", "-"] in rows
 
 
+def test_catalog_list_cli_filters_and_help(stored):
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
+
+    result = runner.invoke(app, ["listserv", "list", "--list-id", "3GPP_TSG_RAN_WG1", "--tsg", "R1"])
+    assert result.exit_code == 0, result.output
+    assert [line.split("\t")[0] for line in result.output.splitlines()] == [
+        "list_id", "3GPP_TSG_RAN_WG1"
+    ]
+    conflicting = runner.invoke(app, ["listserv", "list", "--list-id", "3GPP_TSG_RAN_WG1", "--tsg", "R2"])
+    assert conflicting.exit_code == 0, conflicting.output
+    assert conflicting.output.splitlines() == ["list_id\ttsg\tdescription"]
+    nulls = runner.invoke(app, ["listserv", "list", "--list-id", "LEGACY%", "--tsg", "null"])
+    assert nulls.exit_code == 0, nulls.output
+    assert nulls.output.splitlines()[1] == "LEGACY_NULL_LIST\t-\t-"
+    help_result = runner.invoke(app, ["listserv", "list", "--help"])
+    assert help_result.exit_code == 0
+    assert "--list-id" in help_result.output and "--tsg" in help_result.output
+
+
 
 def test_list_lists_and_ids_include_seeded_catalog_without_messages_and_preserve_null_metadata(
     sqlite_env, disable_auto_sync

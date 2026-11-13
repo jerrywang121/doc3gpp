@@ -226,19 +226,20 @@ SDK payload serializers; they do not sync, parse, or fetch ETSI content.
 
 | Method and path | Inputs / response |
 | --- | --- |
-| `GET /api/listserv/lists` | `{"list_ids":[...],"lists":[{"list_id":"...","tsg":null,"description":null}]}`; ordered catalog entries, including lists without messages |
+| `GET /api/listserv/lists` | Optional rich-LIKE `list_id`, `tsg` query filters; `{"list_ids":[...],"lists":[{"list_id":"...","tsg":null,"description":null}]}`; ordered catalog entries, including lists without messages |
 | `GET /api/listserv/search` | Query: repeatable `date`; `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit` (default 20, 0–150), `offset` (default 0); response is a bare array of search payloads |
 | `GET /api/listserv/show?url=...` | Required exact stored message detail URL; response is the full stored-record payload |
 | `GET /api/listserv/index/status` | Independent FTS/vector `IndexStatus` JSON; no upstream request |
 | `POST /api/listserv/sync` | JSON `{"list_id":"3GPP_TSG_RAN_WG5","dates":[">= 2026-10-01"],"force":false}` |
 | `POST /api/listserv/parse` | Same JSON fields; parse operates on already-synced messages |
+| `POST /api/listserv/parse-item` | JSON `{"url":"https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=","force":false}`; parses one item, even if unsynced |
 | `POST /api/listserv/index` | `rebuild`, `rebuild_embeddings`, `rebuild_all`, optional positive `batch`, `resume`, `stale_only` |
 
 The example ID is the public RAN5 list; any valid public LISTSERV list ID can be
 supplied. `dates` is a list of displayed-calendar-date comparisons; sync and
 parse require one exact list ID. Accepted mutations return HTTP 202 with a
-queued job envelope. Their job kinds are `listserv_sync`, `listserv_parse`, and
-`listserv_index`. The general
+queued job envelope. Their job kinds are `listserv_sync`, `listserv_parse`,
+`listserv_parse_item`, and `listserv_index`. The general
 [monitor/cancel API](#monitor-and-cancel) applies.
 For `tdocs`, stored IDs are comma-delimited; use a contains pattern such as
 `%R1-2610793%` to match one ID within a multi-ID value.
@@ -249,8 +250,11 @@ as MCP. `lists` is ordered by `list_id`; each record has `list_id`, nullable
 The parallel `list_ids` array is retained for existing clients and for the
 `/listserv` selector. The catalog contains seeded references and discovered or
 legacy-backfilled IDs, even when no messages are stored.
+The optional `list_id` and `tsg` filters intersect and use the shared rich LIKE
+grammar (`%`, `_`, leading `!`, `null`, `not-null`); both arrays reflect the
+same filtered records.
 
-Sync/parse job results include `list_id`, `processed`, `skipped`, `failed`,
+Sync/parse/parse-item job results include `list_id`, `processed`, `skipped`, `failed`,
 `index_failed`, `failures`, `index_failures`, and `message`. Source failures
 and derived-index failures stay distinct. Either makes the job `failed`, but an
 index failure never rolls back committed source data; inspect the summary and
@@ -259,6 +263,11 @@ The standard job-detail JSON fields are `job_id`, `kind`, `status`, `params`,
 `result`, `error`, `summary`, `log_tail`, `created_at`, `started_at`,
 `completed_at`, and `links`; the HTTP enqueue response is the slimmer queued
 envelope.
+Single-item parse results additionally include the item `url`. The detail URL
+must have the public ETSI A2 form shown above; the empty `&S=` suffix is optional.
+Already parsed items are skipped unless `force` is true. Successful parsing
+atomically discovers unknown lists and messages without syncing or recording
+archive-page coverage; named attachment bytes are never downloaded.
 
 The shared show JSON fields are `url`, `list_id`, `subject`, `sender`, `date`,
 `date_precision`, `week`, `tdocs`, `attachments`, `content`,
@@ -285,6 +294,9 @@ curl --get 'http://127.0.0.1:13999/api/listserv/show' \
 curl -X POST 'http://127.0.0.1:13999/api/listserv/sync' \
   -H 'Content-Type: application/json' \
   -d '{"list_id":"3GPP_TSG_RAN_WG5","dates":[">= 2026-10-01","<= 2026-10-31"],"force":false}'
+curl -X POST 'http://127.0.0.1:13999/api/listserv/parse-item' \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=","force":true}'
 ```
 
 Search, status, and detail routes are SQL-only. Semantic/hybrid requests can
@@ -297,6 +309,13 @@ negation, `null`, and `not-null`). Stored list IDs appear as suggestions, and
 an empty field searches all lists. Suggestions use the compatibility ID array,
 not the catalog record objects. Sync and parse forms still require one exact
 list ID.
+The parse-item form accepts an explicit detail URL and an optional force flag;
+like the other mutation forms, it starts a background job and reports progress.
+The separate catalog panel above message search has independent rich filters for
+list ID (`catalog_list_id`) and TSG (`catalog_tsg`). Its safe list-ID links open
+the corresponding public ETSI archive. Filtering the panel does not change the
+message search or restrict suggestions and job forms; search and pagination
+preserve the catalog filters.
 `/listserv/show` takes the exact `url` query value. Its forms reuse these
 routes/jobs, and opening either page never syncs or parses. HTTP server
 authentication and job-queue deployment limitations remain as described above.

@@ -1209,6 +1209,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
     from doc3gpp.web.routes.listserv import (
         enqueue_listserv_index,
         enqueue_listserv_parse,
+        enqueue_listserv_parse_item,
         enqueue_listserv_sync,
     )
 
@@ -1266,12 +1267,47 @@ def build_mcp_server(state: WebState) -> MCPServer:
         return _job_result(job, "queued listserv_parse")
 
     @server.tool(
+        name="listserv_parse_item",
+        description="Enqueue parsing one public ETSI LISTSERV email URL, even if not yet synced.",
+    )
+    @_mcp_error_guard
+    def listserv_parse_item(
+        url: Annotated[
+            str,
+            Field(
+                description="Public ETSI LISTSERV A2 email item URL; the empty &S= suffix is optional.",
+                examples=["https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S="],
+            ),
+        ],
+        force: Annotated[bool, Field(description="Re-parse an already parsed item.")] = False,
+    ) -> str:
+        job = enqueue_listserv_parse_item(state.services.job_repo, url, force)
+        return _job_result(job, "queued listserv_parse_item")
+
+    @server.tool(
         name="listserv_list",
         description="List LISTSERV catalog entries with their IDs, TSGs and descriptions.",
     )
     @_mcp_error_guard
-    def listserv_list() -> str:
-        return _to_json(listserv_lists_payload(services.listserv.list_lists()))
+    def listserv_list(
+        list_id: Annotated[
+            str | None,
+            Field(
+                description=f"Rich LIKE filter on catalog list ID. {_LISTSERV_FILTER_HELP}",
+                examples=["3GPP_TSG_RAN_WG5", "%RAN%"],
+            ),
+        ] = None,
+        tsg: Annotated[
+            str | None,
+            Field(
+                description=f"Rich LIKE filter on catalog TSG. {_LISTSERV_FILTER_HELP}",
+                examples=["R1", "R%"],
+            ),
+        ] = None,
+    ) -> str:
+        return _to_json(
+            listserv_lists_payload(services.listserv.list_lists(list_id=list_id, tsg=tsg))
+        )
 
     @server.tool(
         name="listserv_search",

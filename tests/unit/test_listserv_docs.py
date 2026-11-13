@@ -6,6 +6,7 @@ import asyncio
 import html
 import json
 import re
+import shlex
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -19,6 +20,7 @@ from typer.testing import CliRunner
 from doc3gpp.cli import app
 from doc3gpp.models.listserv import (
     ListservAttachment,
+    ListservBatchResult,
     ListservDetail,
     ListservDetailMetadata,
     ListservMessage,
@@ -62,6 +64,36 @@ def test_cli_guide_documents_sync() -> None:
     assert "doc3gpp listserv sync" in Path("docs/cli.md").read_text(
         encoding="utf-8"
     )
+
+
+def test_documented_parse_item_command_invokes_service(
+    monkeypatch, sqlite_env, disable_auto_sync
+):
+    from doc3gpp.services import factory
+
+    calls = []
+
+    class Service:
+        def parse_item(self, url, *, force=False, on_progress=None):
+            calls.append((url, force))
+            return ListservBatchResult(1, 0, {})
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(factory, "build_listserv_parse_service", lambda: Service())
+    guide = Path("docs/cli.md").read_text(encoding="utf-8")
+    commands = [
+        shlex.split(line)
+        for line in guide.splitlines()
+        if line.startswith("doc3gpp listserv parse-item ")
+    ]
+    assert commands, "The CLI guide must provide an executable parse-item example"
+    result = CliRunner().invoke(app, commands[0][1:])
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ("https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=", True)
+    ]
 
 
 def test_mcp_enqueue_result_documents_exact_response_fields() -> None:

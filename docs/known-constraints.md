@@ -174,7 +174,11 @@ runtime context see [processes](processes.md); proposed work is in [TODO](TODO.m
   chronology. Date comparisons still use the displayed calendar day.
 - The LISTSERV catalog is seeded reference data plus IDs accepted through
   successful message discovery; it is not an exhaustive upstream inventory.
-  Unknown IDs are registered only after a message matches the requested dates.
+  Sync registers unknown IDs only after a message matches the requested dates;
+  explicit parse-item registers an unknown list only after its message and detail
+  commit successfully. Parse-item requires a valid public A2 item URL and an
+  unambiguous detail-page header, does not scan archive pages or create coverage,
+  and skips an existing parsed detail unless forced.
   Empty pages before that match are buffered only for the current sync and are
   discarded if no list is registered. Sync coverage is URL/predicate based;
   page selection uses the requested months plus one neighboring month on each

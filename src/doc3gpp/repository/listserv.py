@@ -41,6 +41,10 @@ class ListservRepository(Protocol):
         """Atomically persist parsed message detail and bump ``source_revision`` on change."""
         ...
 
+    def save_parsed_item(self, message: ListservMessage, detail: ListservDetail) -> None:
+        """Atomically persist a newly parsed item without replacing known metadata."""
+        ...
+
     def get(self, url: str) -> ListservRecord | None:
         """Return the stored message record for canonical detail ``url``, or ``None``."""
         ...
@@ -53,7 +57,9 @@ class ListservRepository(Protocol):
         """Return whether ``list_id`` exists in the LISTSERV catalog."""
         ...
 
-    def list_lists(self) -> list[ListservList]:
+    def list_lists(
+        self, *, list_id: str | None = None, tsg: str | None = None
+    ) -> list[ListservList]:
         """Return catalog entries ordered by list ID."""
         ...
 

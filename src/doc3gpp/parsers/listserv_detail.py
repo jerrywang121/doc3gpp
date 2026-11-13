@@ -7,8 +7,14 @@ from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
-from doc3gpp.models.listserv import ListservAttachment, normalize_tdoc_ids
+from doc3gpp.models.listserv import ListservAttachment, ListservMessage, normalize_tdoc_ids
 from doc3gpp.parsers.cr.header import _TDOC_HEADER_PATTERN
+from doc3gpp.parsers.listserv_archive import (
+    ListservArchiveParseError,
+    _derive_week,
+    _extract_subject_tdocs,
+    _parse_message_date,
+)
 
 
 class ListservDetailParseError(ValueError):
@@ -101,6 +107,49 @@ def _is_login_or_empty(html: str, soup: BeautifulSoup) -> bool:
         return True
     title_text = _collapse_ws(soup.title.get_text()) if soup.title else ""
     return "login required" in title_text.lower()
+
+
+def parse_detail_metadata(html: str, *, url: str, list_id: str) -> ListservMessage:
+    """Extract listing metadata from the displayed message's header table."""
+    soup = BeautifulSoup(html, "lxml")
+    if _is_login_or_empty(html, soup):
+        raise ListservDetailParseError("Detail page HTML is empty or requires login.")
+
+    tables: dict[int, dict[str, list[str]]] = {}
+    for row in soup.find_all("tr"):
+        cells = row.find_all(["th", "td"], recursive=False)
+        table = row.find_parent("table")
+        if table is None:
+            continue
+        headers = tables.setdefault(id(table), {})
+        for index in range(0, len(cells), 2):
+            key = _collapse_ws(cells[index].get_text("", strip=True)).rstrip(":").lower()
+            if key not in ("subject", "from", "date"):
+                continue
+            value = cells[index + 1].get_text("", strip=False) if index + 1 < len(cells) else ""
+            headers.setdefault(key, []).append(_collapse_ws(value))
+
+    candidates = [h for h in tables.values() if all(key in h for key in ("subject", "from", "date"))]
+    if len(candidates) != 1 or any(
+        len(values) != 1 or not values[0] for values in candidates[0].values()
+    ):
+        raise ListservDetailParseError("Detail page has missing or ambiguous message headers.")
+    headers = candidates[0]
+    try:
+        message_date, precision = _parse_message_date(headers["date"][0])
+    except ListservArchiveParseError:
+        raise ListservDetailParseError("Detail page has an invalid message date.") from None
+    subject = headers["subject"][0]
+    return ListservMessage(
+        url=url,
+        list_id=list_id,
+        subject=subject,
+        sender=headers["from"][0],
+        date=message_date,
+        date_precision=precision,
+        week=_derive_week(f"{message_date.year:04d}-{message_date.month:02d}", message_date),
+        subject_tdocs=_extract_subject_tdocs(subject),
+    )
 
 
 def _is_usable_href(href: str) -> bool:

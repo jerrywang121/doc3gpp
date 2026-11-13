@@ -133,6 +133,31 @@ def test_source_failures_exit_nonzero(built):
     assert "u1" in result.output and "HTTP 500" in result.output
 
 
+@pytest.mark.parametrize("reason", [None, "HTTP 500", "Index update failed (RuntimeError)"])
+def test_parse_item_cli_validates_calls_and_closes(monkeypatch, built, reason):
+    url = "https://list.etsi.org/scripts/wa.exe?A2=team_x;abc.2611B"
+    canonical = "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;abc.2611B&S="
+    service = built["parse"]
+    service.result = ListservBatchResult(1, 0, {} if reason is None else {canonical: reason})
+    service.parse_item = lambda item, **kw: (service.calls.append((item, kw)) or service.result)
+    service.close = lambda: service.calls.append(("closed",))
+    result = runner.invoke(app, ["listserv", "parse-item", url, "--force"])
+    assert result.exit_code == (0 if reason is None else 1), result.output
+    assert service.calls[0][0] == canonical and service.calls[0][1]["force"] is True
+    assert service.calls[1] == ("closed",)
+    if reason and reason.startswith("Index"):
+        assert "source data was committed" in result.output
+
+
+def test_parse_item_cli_rejects_bad_url_before_schema_or_service(monkeypatch, built):
+    from doc3gpp.storage.db import migrate
+
+    monkeypatch.setattr(migrate, "create_schema", lambda *_: pytest.fail("schema accessed"))
+    result = runner.invoke(app, ["listserv", "parse-item", "https://evil.example/x"])
+    assert result.exit_code == 2
+    assert built["built"] == []
+
+
 @pytest.mark.parametrize(
     ("reason", "expected"),
     [
@@ -168,7 +193,7 @@ def test_list_prints_ids(monkeypatch, sqlite_env, disable_auto_sync):
         def list_ids(self):
             return ["A", "B"]
 
-        def list_lists(self):
+        def list_lists(self, *, list_id=None, tsg=None):
             return [
                 SimpleNamespace(list_id="ALPHA", tsg="R1", description="Radio access"),
                 SimpleNamespace(list_id="BETA", tsg=None, description=None),

@@ -3395,8 +3395,12 @@ local allowlist. `3GPP_TSG_RAN_WG5` is the public RAN5 list, not an allowlist.
 `listserv list` reads the main-database catalog rather than upstream pages or
 only message rows. It prints tab-separated `list_id`, `tsg`, and `description`
 columns in ID order; null metadata is shown as `-`. The catalog includes
-pre-seeded reference entries and lists discovered by sync, including entries
+pre-seeded reference entries and lists discovered by sync or explicit item parsing, including entries
 that do not yet have stored messages.
+Optional `--list-id` and `--tsg` filters intersect and use the shared rich SQL
+LIKE grammar: plain values match exactly, `%` and `_` are wildcards, `!` negates
+a pattern, and `null` / `not-null` test SQL nullability. SQL negation does not
+match a null TSG.
 
 ```bash
 # Sync message listings. Without --date, cover the rolling preceding calendar
@@ -3407,8 +3411,12 @@ doc3gpp listserv sync 3GPP_TSG_RAN_WG5 --date '>= 2026-10-01' --date '<= 2026-10
 # Parse already-synced messages separately; --force reparses existing details.
 doc3gpp listserv parse 3GPP_TSG_RAN_WG5 --date '>= 2026-10-01' --force
 
+# Parse one public message directly, including an unsynced list or message.
+doc3gpp listserv parse-item 'https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=' --force
+
 # Stored-only reads and search modes (FTS, semantic, hybrid, filter-only).
 doc3gpp listserv list
+doc3gpp listserv list --list-id '%RAN%' --tsg 'R%'
 doc3gpp listserv search --list-id 3GPP_TSG_RAN_WG5 --tdocs '%R1-2610793%' --format json
 doc3gpp listserv search --text 'handover' --semantic 'mobility procedure' --limit 10
 # Replace the placeholder with an exact URL from a search result.
@@ -3428,6 +3436,16 @@ stored messages. Neither operation has an implicit read-time counterpart.
 Sync selects archive months intersecting the requested dates plus one neighboring
 month on each side; unusually dated messages on more distant pages can be missed.
 `--force` revisits selected pages but does not expand the date-based selection.
+
+`parse-item URL` accepts a public ETSI detail URL of the form
+`https://list.etsi.org/scripts/wa.exe?A2=<list_id>;<item_id>.<YYMM[A-E]>&S=`;
+the empty `&S=` suffix is optional. Quote the URL in a shell. It fetches and
+parses that message without syncing archive pages. Previously parsed details are
+skipped unless `--force` is supplied. A successful parse atomically registers an
+unknown list and stores the message and detail; failures do not create the list
+or replace a previously stored detail. Attachments are metadata only. Index
+failures are reported separately from source failures: committed source remains
+available and stale indexes can be rebuilt with `listserv index`.
 
 `listserv search` accepts `--date`, `--list-id`, `--from`, `--subject`,
 `--tdocs`, `--text`, `--semantic`, `--limit`, `--offset`, and

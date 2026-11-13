@@ -137,6 +137,29 @@ def test_mcp_search_matches_http_with_repeated_dates_and_both_truncation_flags(s
     assert tool_payload[0]["preview_truncated"] is True
 
 
+def test_catalog_mcp_filters_match_http_and_tool_schema(surfaces):
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    http, server, _state = surfaces
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
+    for filters, expected in (
+        ({"list_id": "3GPP_TSG_RAN_WG1", "tsg": "R1"}, ["3GPP_TSG_RAN_WG1"]),
+        ({"list_id": "3GPP_TSG_RAN_WG1", "tsg": "R2"}, []),
+        ({"list_id": "LEGACY%", "tsg": "null"}, ["LEGACY_NULL_LIST"]),
+    ):
+        payload = _call_json(server, "listserv_list", filters)
+        assert payload == http.get("/api/listserv/lists", params=filters).json()
+        assert payload["list_ids"] == expected
+        assert [row["list_id"] for row in payload["lists"]] == expected
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    props = tools["listserv_list"].input_schema["properties"]
+    assert "LIKE" in props["list_id"]["description"]
+    assert "LIKE" in props["tsg"]["description"]
+
+
 def test_mcp_list_and_index_status_match_http_and_read_without_network(surfaces):
     from doc3gpp.storage.db.models import ListservListORM
     from doc3gpp.storage.db.session import get_session_factory
@@ -205,6 +228,47 @@ def test_mcp_sync_parse_and_rebuild_enqueue_the_http_job_kinds(surfaces):
         job = state.services.job_repo.get(job_id)
         assert job.kind is kind
         assert dict(job.params) == expected_params
+
+
+def test_parse_item_mcp_queues_canonical_and_documents_contract(surfaces):
+    from mcp.shared.exceptions import MCPError
+
+    _http, server, state = surfaces
+    base = "https://list.etsi.org/scripts/wa.exe?A2=team_x;abc.2611B"
+    canonical = "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;abc.2611B&S="
+    for url in (base, base + "&S="):
+        result = _call_json(server, "listserv_parse_item", {"url": url, "force": True})
+        assert result["status"] == "queued"
+        job = state.services.job_repo.get(result["job_id"])
+        assert job.kind.value == "listserv_parse_item"
+        assert dict(job.params) == {"url": canonical, "force": True}
+    before = len(state.services.job_repo.list(limit=100))
+    with pytest.raises(MCPError):
+        asyncio.run(server.call_tool("listserv_parse_item", {"url": "https://evil.example/x"}))
+    assert len(state.services.job_repo.list(limit=100)) == before
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    props = tools["listserv_parse_item"].input_schema["properties"]
+    assert "url" in props and "force" in props and props["url"]["description"]
+
+
+def test_packaged_skill_listserv_examples_call_registered_tools(surfaces):
+    from pathlib import Path
+
+    _http, server, state = surfaces
+    skill = Path("src/doc3gpp/data/skills/doc3gpp/SKILL.md").read_text(encoding="utf-8")
+    examples = {}
+    for line in skill.splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[0] in {"listserv_list", "listserv_parse_item"}:
+            examples[parts[0]] = json.loads(parts[1])
+    assert set(examples) == {"listserv_list", "listserv_parse_item"}
+    catalog = _call_json(server, "listserv_list", examples["listserv_list"])
+    assert catalog["list_ids"] == ["3GPP_TSG_RAN_WG5"]
+    queued = _call_json(server, "listserv_parse_item", examples["listserv_parse_item"])
+    job = state.services.job_repo.get(queued["job_id"])
+    assert job.kind is JobKind.LISTSERV_PARSE_ITEM
+    assert job.params["force"] is True
+    assert job.params["url"].endswith(";5d45a78f.2611B&S=")
 
 
 def test_mcp_standard_enqueue_response_shape_is_unchanged(surfaces):

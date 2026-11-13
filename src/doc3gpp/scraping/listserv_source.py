@@ -168,6 +168,38 @@ def validate_listserv_url(url: str) -> str:
     return urlunsplit(("https", LISTSERV_HOST, path, parsed.query, ""))
 
 
+def validate_listserv_item_url(url: str) -> tuple[str, str]:
+    """Validate a message A2 URL and return its canonical identity and list ID."""
+    if not url or "#" in url or any(not ch.isprintable() or ch.isspace() for ch in url):
+        raise ValueError("Invalid LISTSERV item URL.")
+    validated = validate_listserv_url(url)
+    parsed = urlsplit(validated)
+    if parsed.path != "/scripts/wa.exe":
+        raise ValueError("Invalid LISTSERV item URL path.")
+    match = re.fullmatch(
+        r"A2=([^;]+);([A-Za-z0-9_-]+)\.([0-9]{2})(0[1-9]|1[0-2])([A-E])(?:&S=)?",
+        parsed.query,
+    )
+    if match is None or re.search(r"%(?![0-9A-Fa-f]{2})", match.group(1)):
+        raise ValueError("Invalid LISTSERV item URL query.")
+    try:
+        list_id = normalize_list_id(unquote(match.group(1), errors="strict"))
+        encoded_list = archive_index_url(list_id).partition("A0=")[2]
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError("Invalid LISTSERV item URL list ID.") from exc
+    canonical = (
+        f"{LISTSERV_WA_URL}?A2={encoded_list};{match.group(2)}."
+        f"{match.group(3)}{match.group(4)}{match.group(5)}&S="
+    )
+    return canonical, list_id
+
+
+def listserv_item_url_aliases(canonical_url: str) -> tuple[str, str]:
+    """Return the canonical and suffix-less spellings of a legal item URL."""
+    canonical, _ = validate_listserv_item_url(canonical_url)
+    return canonical, canonical.removesuffix("&S=")
+
+
 def _extract_charset_from_header(content_type_header: str) -> str | None:
     match = _CHARSET_PARAM_RE.search(content_type_header)
     if match is None:

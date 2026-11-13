@@ -125,15 +125,42 @@ def listserv_parse(
     _run_batch("parse", "build_listserv_parse_service", list_id, date, force)
 
 
+@listserv_app.command("parse-item")
+def listserv_parse_item(
+    url: str = typer.Argument(..., help="Public ETSI LISTSERV A2 email item URL."),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-parse an already parsed item."),
+) -> None:
+    """Fetch and parse one email item, including previously unsynced messages."""
+    from doc3gpp.scraping.listserv_source import validate_listserv_item_url
+
+    try:
+        canonical, _ = validate_listserv_item_url(url)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    from doc3gpp.services.factory import build_listserv_parse_service
+    from doc3gpp.storage.db.migrate import create_schema
+
+    create_schema("main")
+    service = build_listserv_parse_service()
+    try:
+        result = service.parse_item(canonical, force=force, on_progress=lambda m: typer.echo(m, err=True))
+    finally:
+        service.close()
+    _report_batch("parse-item", result)
+
+
 @listserv_app.command("list")
-def listserv_list() -> None:
+def listserv_list(
+    list_id: str | None = typer.Option(None, "--list-id", help=f"Rich LIKE filter on list ID. {_RICH_FILTER_HELP}"),
+    tsg: str | None = typer.Option(None, "--tsg", help=f"Rich LIKE filter on TSG. {_RICH_FILTER_HELP}"),
+) -> None:
     """List LISTSERV catalog entries and their TSG and description."""
     from doc3gpp.services.factory import build_listserv_service
     from doc3gpp.storage.db.migrate import create_schema
 
     create_schema("main")
     typer.echo("list_id\ttsg\tdescription")
-    for item in build_listserv_service().list_lists():
+    for item in build_listserv_service().list_lists(list_id=list_id, tsg=tsg):
         typer.echo(
             "\t".join(
                 value if value is not None else "-"

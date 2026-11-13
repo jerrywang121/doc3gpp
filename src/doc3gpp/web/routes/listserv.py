@@ -24,6 +24,7 @@ from doc3gpp.models.listserv_payloads import (
 )
 from doc3gpp.models.search import SearchError, SearchIndexCorruptError, SearchQueryError
 from doc3gpp.repository.protocols import JobRepository
+from doc3gpp.scraping.listserv_source import archive_index_url, validate_listserv_item_url
 from doc3gpp.services.listserv_index import ListservIndexService
 from doc3gpp.services.listserv_search import ListservSearchService
 from doc3gpp.services.listserv_service import ListservService
@@ -106,6 +107,15 @@ def enqueue_listserv_parse(
     return enqueue_listserv_batch(job_repo, JobKind.LISTSERV_PARSE, list_id, dates, force)
 
 
+def enqueue_listserv_parse_item(job_repo: JobRepository, url: str, force: bool = False) -> Job:
+    """Validate and enqueue one exact public email item."""
+    try:
+        canonical, _ = validate_listserv_item_url(url)
+    except ValueError as exc:
+        raise InvalidFilterError(str(exc)) from exc
+    return job_repo.create(JobKind.LISTSERV_PARSE_ITEM, {"url": canonical, "force": bool(force)})
+
+
 def enqueue_listserv_index(
     job_repo: JobRepository,
     *,
@@ -168,6 +178,14 @@ class _BatchBody(BaseModel):
     )
 
 
+class _ParseItemBody(BaseModel):
+    url: str = Field(
+        description="Public ETSI LISTSERV A2 email item URL, with optional empty &S= suffix.",
+        examples=["https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S="],
+    )
+    force: bool = Field(default=False, description="Re-parse an already parsed item.")
+
+
 class _IndexBody(BaseModel):
     rebuild: bool = Field(
         default=False,
@@ -213,9 +231,23 @@ class _IndexBody(BaseModel):
     ),
 )
 def list_listserv_ids(
+    list_id: str | None = Query(
+        default=None,
+        description=f"Rich LIKE filter on catalog list ID. {_LISTSERV_FILTER_HELP}",
+        examples=["3GPP_TSG_RAN_WG5", "%RAN%"],
+    ),
+    tsg: str | None = Query(
+        default=None,
+        description=f"Rich LIKE filter on catalog TSG. {_LISTSERV_FILTER_HELP}",
+        examples=["R1", "R%"],
+    ),
     service: ListservService = Depends(get_listserv_service),
 ) -> dict[str, Any]:
-    return listserv_lists_payload(service.list_lists())
+    return listserv_lists_payload(
+        service.list_lists(
+            list_id=_optional_search_filter(list_id), tsg=_optional_search_filter(tsg)
+        )
+    )
 
 
 @router.get(
@@ -358,6 +390,13 @@ def post_listserv_parse(
     return _queued(enqueue_listserv_parse(job_repo, body.list_id, body.dates, body.force))
 
 
+@router.post("/parse-item", status_code=202, summary="Queue parsing one LISTSERV email URL")
+def post_listserv_parse_item(
+    body: _ParseItemBody, job_repo: JobRepository = Depends(get_job_repo)
+) -> JSONResponse:
+    return _queued(enqueue_listserv_parse_item(job_repo, body.url, body.force))
+
+
 @router.post(
     "/index",
     status_code=202,
@@ -381,6 +420,8 @@ def listserv_page(
     request: Request,
     date: list[str] | None = Query(default=None),
     list_id: str | None = Query(default=None),
+    catalog_list_id: str | None = Query(default=None),
+    catalog_tsg: str | None = Query(default=None),
     sender: str | None = Query(default=None),
     subject: str | None = Query(default=None),
     tdocs: str | None = Query(default=None),
@@ -406,7 +447,18 @@ def listserv_page(
     normalized_sender = _optional_search_filter(sender)
     normalized_subject = _optional_search_filter(subject)
     normalized_tdocs = _optional_search_filter(tdocs)
-    list_ids = list_listserv_ids(service)["list_ids"]
+    list_ids = service.list_ids()
+    catalog_filters = {
+        "list_id": _optional_search_filter(catalog_list_id),
+        "tsg": _optional_search_filter(catalog_tsg),
+    }
+    catalog_entries = []
+    for item in service.list_lists(**catalog_filters):
+        try:
+            archive_url = archive_index_url(item.list_id)
+        except ValueError:
+            archive_url = None
+        catalog_entries.append({"item": item, "url": archive_url})
     index_status = listserv_index_status(index_service)
     hits = search_listserv(
         date=date_values or None,
@@ -430,6 +482,8 @@ def listserv_page(
             "active_nav": "listserv",
             "pending_jobs": pending_jobs,
             "list_ids": list_ids,
+            "catalog_filters": catalog_filters,
+            "catalog_entries": catalog_entries,
             "index_status": index_status,
             "hits": hits,
             "filters": {
@@ -489,6 +543,7 @@ __all__ = [
     "enqueue_listserv_batch",
     "enqueue_listserv_index",
     "enqueue_listserv_parse",
+    "enqueue_listserv_parse_item",
     "enqueue_listserv_sync",
     "router",
     "ui_router",

@@ -40,6 +40,12 @@
         force: checked(form, "force"),
       });
     });
+    bind(document.getElementById("listserv-parse-item-form"), function (form) {
+      return JSON.stringify({
+        url: form.elements.url.value,
+        force: checked(form, "force"),
+      });
+    });
     bind(document.getElementById("listserv-index-form"), function (form) {
       var body = {
         rebuild: checked(form, "rebuild"),

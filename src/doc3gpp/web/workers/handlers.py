@@ -905,9 +905,19 @@ async def _run_listserv_batch(
     verb: str,
     builder_name: str,
 ) -> Mapping[str, JSONValue]:
-    list_id, dates = validate_batch_request(
-        job.params.get("list_id"), job.params.get("dates")
-    )
+    if verb == "parse_item":
+        from doc3gpp.scraping.listserv_source import validate_listserv_item_url
+
+        raw_url = job.params.get("url")
+        if not isinstance(raw_url, str):
+            raise ValueError("LISTSERV item URL is required.")
+        item_url, list_id = validate_listserv_item_url(raw_url)
+        dates = []
+    else:
+        item_url = None
+        list_id, dates = validate_batch_request(
+            job.params.get("list_id"), job.params.get("dates")
+        )
     force = bool(job.params.get("force", False))
     if cancel_event.is_set():
         raise asyncio.CancelledError()
@@ -924,6 +934,10 @@ async def _run_listserv_batch(
             else builder(settings, embedder_factory=embedder_factory)
         )
         try:
+            if item_url is not None:
+                return service.parse_item(
+                    item_url, force=force, on_progress=progress, cancelled=cancel_event.is_set,
+                )
             return getattr(service, verb)(
                 list_id,
                 dates=dates,
@@ -941,6 +955,8 @@ async def _run_listserv_batch(
     if cancel_event.is_set():
         raise asyncio.CancelledError()
     summary = summarize_batch(verb, list_id, result)
+    if item_url is not None:
+        summary["url"] = item_url
     progress(str(summary["message"]), force=True)
     return summary
 
@@ -970,6 +986,20 @@ async def _listserv_parse(
     return await _run_listserv_batch(
         job, services, settings, progress=progress, cancel_event=cancel_event,
         verb="parse", builder_name="build_listserv_parse_service",
+    )
+
+
+async def _listserv_parse_item(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    return await _run_listserv_batch(
+        job, services, settings, progress=progress, cancel_event=cancel_event,
+        verb="parse_item", builder_name="build_listserv_parse_service",
     )
 
 
@@ -1032,6 +1062,7 @@ class JobHandlers:
         JobKind.CACHE_PURGE: _cache_purge,
         JobKind.LISTSERV_SYNC: _listserv_sync,
         JobKind.LISTSERV_PARSE: _listserv_parse,
+        JobKind.LISTSERV_PARSE_ITEM: _listserv_parse_item,
         JobKind.LISTSERV_INDEX: _listserv_index,
     }
 

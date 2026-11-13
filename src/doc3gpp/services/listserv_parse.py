@@ -29,16 +29,20 @@ from doc3gpp.models.listserv import (
 from doc3gpp.parsers.listserv_detail import (
     ListservDetailParseError,
     extract_tdocs,
+    parse_detail_metadata,
     parse_detail_page,
     parse_message_body,
 )
 from doc3gpp.repository.listserv import ListservRepository
 from doc3gpp.scraping.listserv_source import (
+    FetchedPage,
     ListservAuthRequiredError,
     ListservRedirectError,
     ListservSource,
     ListservSourceError,
     archive_index_url,
+    listserv_item_url_aliases,
+    validate_listserv_item_url,
     validate_listserv_url,
 )
 from doc3gpp.services.listserv_sync import ListservIndexUpdater, ListservPageSource
@@ -158,13 +162,10 @@ class ListservParseService:
         self._owns_index_service = owns_index_service
         self._closed = False
 
-    def _update_indexes(
-        self, record: ListservRecord, failures: dict[str, str]
-    ) -> None:
+    def _update_indexes(self, url: str, failures: dict[str, str]) -> None:
         """Best-effort derived-index update after a committed detail; never raises."""
         if self._index_service is None:
             return
-        url = record.message.url
         try:
             fresh = self._repository.get(url)
             if fresh is None:
@@ -209,6 +210,25 @@ class ListservParseService:
     ) -> ListservDetail:
         validated_detail_url = validate_listserv_url(record.message.url)
         fetched_detail = source.fetch(validated_detail_url)
+        return ListservParseService._parse_fetched_detail(
+            source,
+            record.message.url,
+            fetched_detail,
+            max_chars=max_chars,
+            parser_version=parser_version,
+            parsed_at=parsed_at,
+        )
+
+    @staticmethod
+    def _parse_fetched_detail(
+        source: ListservPageSource,
+        url: str,
+        fetched_detail: FetchedPage,
+        *,
+        max_chars: int,
+        parser_version: str,
+        parsed_at: datetime,
+    ) -> ListservDetail:
         body_part_url, attachments, inline_fallback = parse_detail_page(
             fetched_detail.text,
             fetched_detail.final_url,
@@ -235,7 +255,7 @@ class ListservParseService:
             content_truncated = False
 
         return ListservDetail(
-            url=record.message.url,
+            url=url,
             attachments=attachments,
             tdocs=detail_tdocs,
             content=stored_content,
@@ -243,6 +263,63 @@ class ListservParseService:
             parser_version=parser_version,
             parsed_at=parsed_at,
         )
+
+    def parse_item(
+        self,
+        url: str,
+        *,
+        force: bool = False,
+        on_progress: Callable[[str], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> ListservBatchResult:
+        """Fetch and atomically parse one explicit public message URL."""
+        canonical, list_id = validate_listserv_item_url(url)
+        if cancelled is not None and cancelled():
+            _emit_progress(on_progress, f"Cancelled LISTSERV parse for {list_id}")
+            return ListservBatchResult(processed=0, skipped=1, failures={})
+
+        aliases = listserv_item_url_aliases(canonical)
+        known = self._repository.get_many(aliases)
+        record = next((known[alias] for alias in aliases if alias in known), None)
+        item_url = record.message.url if record is not None else canonical
+        if record is not None and record.detail is not None and not force:
+            return ListservBatchResult(processed=0, skipped=1, failures={})
+
+        source_ctx = (
+            nullcontext(self._source)
+            if self._source is not None
+            else ListservSource(settings=self._settings)
+        )
+        try:
+            with source_ctx as source:
+                fetched = source.fetch(validate_listserv_url(item_url))
+                message = (
+                    record.message
+                    if record is not None
+                    else parse_detail_metadata(fetched.text, url=item_url, list_id=list_id)
+                )
+                detail = self._parse_fetched_detail(
+                    source,
+                    item_url,
+                    fetched,
+                    max_chars=self._resolve_max_content_chars(),
+                    parser_version=self._resolve_parser_version(),
+                    parsed_at=self._resolve_now(),
+                )
+            if cancelled is not None and cancelled():
+                _emit_progress(on_progress, f"Cancelled LISTSERV parse for {list_id}")
+                return ListservBatchResult(processed=0, skipped=1, failures={})
+            self._repository.save_parsed_item(message, detail)
+        except Exception as exc:  # noqa: BLE001
+            reason = _safe_parse_failure_description(exc)
+            logger.warning("LISTSERV item parse failed for %s: %s", item_url, reason)
+            _emit_progress(on_progress, f"Failed {item_url}: {reason}")
+            return ListservBatchResult(processed=0, skipped=0, failures={item_url: reason})
+
+        failures: dict[str, str] = {}
+        self._update_indexes(item_url, failures)
+        _emit_progress(on_progress, f"Processed {item_url}")
+        return ListservBatchResult(processed=1, skipped=0, failures=failures)
 
     def parse(
         self,
@@ -376,7 +453,7 @@ class ListservParseService:
                             continue
 
                         processed += 1
-                        self._update_indexes(record, failures)
+                        self._update_indexes(msg_url, failures)
                         _emit_progress(on_progress, f"Processed {msg_url}")
 
                 if is_cancelled() and pending:

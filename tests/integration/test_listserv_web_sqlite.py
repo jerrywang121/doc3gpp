@@ -114,6 +114,24 @@ def test_http_show_matches_sdk_payload(client):
     ] is None
 
 
+def test_parse_item_rest_queues_canonical_and_rejects_invalid(client):
+    base = "https://list.etsi.org/scripts/wa.exe?A2=team_x;abc.2611B"
+    canonical = "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;abc.2611B&S="
+    for url in (base, base + "&S="):
+        response = client.post("/api/listserv/parse-item", json={"url": url, "force": True})
+        assert response.status_code == 202
+        job = client.app.state.web.services.job_repo.get(response.json()["job_id"])
+        assert job.kind.value == "listserv_parse_item"
+        assert dict(job.params) == {"url": canonical, "force": True}
+    repo = client.app.state.web.services.job_repo
+    before = len(repo.list(limit=100))
+    assert client.post("/api/listserv/parse-item", json={"url": "https://evil.example/x"}).status_code == 400
+    assert len(repo.list(limit=100)) == before
+    schema = client.get("/openapi.json").json()
+    body = schema["paths"]["/api/listserv/parse-item"]["post"]["requestBody"]
+    assert body["content"]["application/json"]["schema"]
+
+
 def test_http_show_empty_content_matches_sdk_and_differs_from_unparsed(client):
     service = factory.build_listserv_service()
     response = client.get("/api/listserv/show", params={"url": EMPTY_URL})
@@ -138,6 +156,32 @@ def test_http_show_not_found_is_404(client):
     response = client.get("/api/listserv/show", params={"url": MISSING_URL})
     assert response.status_code == 404
     assert response.json()["error"] == "listserv_message_not_found"
+
+
+def test_catalog_http_filters_and_openapi(client):
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
+
+    response = client.get("/api/listserv/lists", params={"list_id": LIST_ID, "tsg": "R1"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["list_ids"] == [LIST_ID]
+    assert [entry["list_id"] for entry in payload["lists"]] == [LIST_ID]
+    assert client.get("/api/listserv/lists", params={"list_id": LIST_ID, "tsg": "R2"}).json() == {
+        "list_ids": [], "lists": []
+    }
+    nulls = client.get("/api/listserv/lists", params={"list_id": "LEGACY%", "tsg": "null"}).json()
+    assert nulls["list_ids"] == ["LEGACY_NULL_LIST"]
+    assert client.get("/api/listserv/lists", params={"list_id": "  "}).json() == client.get(
+        "/api/listserv/lists"
+    ).json()
+    params = client.get("/openapi.json").json()["paths"]["/api/listserv/lists"]["get"]["parameters"]
+    descriptions = {param["name"]: param.get("description", "") for param in params}
+    assert "LIKE" in descriptions["list_id"] and "LIKE" in descriptions["tsg"]
 
 
 def test_http_lists_matches_sdk(client):

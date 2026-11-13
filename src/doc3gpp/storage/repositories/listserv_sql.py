@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import Select, and_, func, or_, select
@@ -33,6 +34,10 @@ from doc3gpp.models.listserv import (
 )
 from doc3gpp.models.listserv_catalog import infer_listserv_tsg
 from doc3gpp.repository.listserv import ListservRepository
+from doc3gpp.scraping.listserv_source import (
+    listserv_item_url_aliases,
+    validate_listserv_item_url,
+)
 from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.models import (
     ListservArchivePageORM,
@@ -64,9 +69,38 @@ class SQLAlchemyListservRepository(ListservRepository):
         with self._session_factory() as session:
             if messages:
                 self._register_list_if_absent(session, page.list_id)
-            self._upsert_messages(session, messages)
+            self._upsert_messages(session, self._resolve_item_aliases(session, messages))
             self._upsert_coverage_and_next_urls(session, page, coverage, next_urls)
             session.commit()
+
+    def _resolve_item_aliases(
+        self, session: Session, messages: Sequence[ListservMessage]
+    ) -> list[ListservMessage]:
+        """Keep a stored item key when a listing uses its equivalent A2 spelling."""
+        candidates: list[tuple[str, ...]] = []
+        for message in messages:
+            try:
+                canonical, _ = validate_listserv_item_url(message.url)
+            except ValueError:
+                candidates.append((message.url,))
+            else:
+                candidates.append(tuple(dict.fromkeys((message.url, *listserv_item_url_aliases(canonical)))))
+        all_urls = {url for group in candidates for url in group}
+        if not all_urls:
+            return []
+        stored = set(session.scalars(select(ListservMessageORM.url).where(
+            ListservMessageORM.url.in_(all_urls)
+        )))
+        known: dict[str, str] = {}
+        result: list[ListservMessage] = []
+        for message, group in zip(messages, candidates):
+            key = next((url for url in group if url in stored), None)
+            if key is None:
+                key = next((known[url] for url in group if url in known), message.url)
+            for url in group:
+                known.setdefault(url, key)
+            result.append(message if key == message.url else replace(message, url=key))
+        return result
 
     def _register_list_if_absent(self, session: Session, list_id: str) -> None:
         normalized_list_id = normalize_list_id(list_id)
@@ -229,47 +263,62 @@ class SQLAlchemyListservRepository(ListservRepository):
 
     def save_detail(self, detail: ListservDetail) -> None:
         """Atomically persist parsed message detail and bump ``source_revision`` on change."""
+        with self._session_factory() as session:
+            self._save_detail(session, detail)
+            session.commit()
+
+    def save_parsed_item(self, message: ListservMessage, detail: ListservDetail) -> None:
+        """Save catalog, new message and detail in one transaction."""
+        if message.url != detail.url:
+            raise ValueError("Message and detail URLs must match.")
+        with self._session_factory() as session:
+            self._register_list_if_absent(session, message.list_id)
+            if session.get(ListservMessageORM, message.url) is None:
+                self._upsert_messages(session, [message])
+                session.flush()
+            self._save_detail(session, detail)
+            session.commit()
+
+    def _save_detail(self, session: Session, detail: ListservDetail) -> None:
         attachments_json = _encode_attachments(detail.attachments)
         tdocs_str = ",".join(detail.tdocs)
         compressed_content = compress_json(detail.content)
         parsed_at_utc = _ensure_utc_datetime(detail.parsed_at)
 
-        with self._session_factory() as session:
-            msg_row = session.get(ListservMessageORM, detail.url)
-            existing = session.get(ListservDetailORM, detail.url)
-            if existing is None:
-                new_row = ListservDetailORM(
-                    url=detail.url,
-                    attachments=attachments_json,
-                    tdocs=tdocs_str,
-                    content=compressed_content,
-                    content_truncated=detail.content_truncated,
-                    parser_version=detail.parser_version,
-                    parsed_at=parsed_at_utc,
-                )
-                session.add(new_row)
-                if msg_row is not None:
-                    msg_row.source_revision = int(msg_row.source_revision) + 1
-            else:
-                existing_content = decompress_json(existing.content)
-                if not isinstance(existing_content, str):
-                    existing_content = ""
-                changed = (
-                    existing.attachments != attachments_json
-                    or existing.tdocs != tdocs_str
-                    or existing_content != detail.content
-                    or bool(existing.content_truncated) != bool(detail.content_truncated)
-                    or existing.parser_version != detail.parser_version
-                )
-                existing.attachments = attachments_json
-                existing.tdocs = tdocs_str
-                existing.content = compressed_content
-                existing.content_truncated = detail.content_truncated
-                existing.parser_version = detail.parser_version
-                existing.parsed_at = parsed_at_utc
-                if changed and msg_row is not None:
-                    msg_row.source_revision = int(msg_row.source_revision) + 1
-            session.commit()
+        msg_row = session.get(ListservMessageORM, detail.url)
+        existing = session.get(ListservDetailORM, detail.url)
+        if existing is None:
+            new_row = ListservDetailORM(
+                url=detail.url,
+                attachments=attachments_json,
+                tdocs=tdocs_str,
+                content=compressed_content,
+                content_truncated=detail.content_truncated,
+                parser_version=detail.parser_version,
+                parsed_at=parsed_at_utc,
+            )
+            session.add(new_row)
+            if msg_row is not None:
+                msg_row.source_revision = int(msg_row.source_revision) + 1
+        else:
+            existing_content = decompress_json(existing.content)
+            if not isinstance(existing_content, str):
+                existing_content = ""
+            changed = (
+                existing.attachments != attachments_json
+                or existing.tdocs != tdocs_str
+                or existing_content != detail.content
+                or bool(existing.content_truncated) != bool(detail.content_truncated)
+                or existing.parser_version != detail.parser_version
+            )
+            existing.attachments = attachments_json
+            existing.tdocs = tdocs_str
+            existing.content = compressed_content
+            existing.content_truncated = detail.content_truncated
+            existing.parser_version = detail.parser_version
+            existing.parsed_at = parsed_at_utc
+            if changed and msg_row is not None:
+                msg_row.source_revision = int(msg_row.source_revision) + 1
 
     def get(self, url: str) -> ListservRecord | None:
         """Return the stored message record for canonical detail ``url``, or ``None``."""
@@ -324,10 +373,15 @@ class SQLAlchemyListservRepository(ListservRepository):
         with self._session_factory() as session:
             return session.get(ListservListORM, normalized_list_id) is not None
 
-    def list_lists(self) -> list[ListservList]:
-        """Return catalog entries ordered by list ID."""
+    def list_lists(
+        self, *, list_id: str | None = None, tsg: str | None = None
+    ) -> list[ListservList]:
+        """Return catalog entries matching rich text filters, ordered by list ID."""
         with self._session_factory() as session:
-            stmt = select(ListservListORM).order_by(ListservListORM.list_id.asc())
+            stmt = select(ListservListORM)
+            stmt = apply_text_filter(stmt, ListservListORM.list_id, list_id)
+            stmt = apply_text_filter(stmt, ListservListORM.tsg, tsg)
+            stmt = stmt.order_by(ListservListORM.list_id.asc())
             rows = session.scalars(stmt).all()
         return [
             ListservList(

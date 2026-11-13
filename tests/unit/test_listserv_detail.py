@@ -316,6 +316,82 @@ def test_parse_detail_page_rejects_empty_or_login_html(
         parse_detail_page(malformed_html, BASE_DETAIL_URL)
 
 
+def _metadata_html(subject: str = "Topic R1-2610793", sender: str = "Alice &lt;[log in to unmask]&gt;", date: str = "2026-11-13 12:00:00 +0000") -> str:
+    return (
+        '<html><body><table class="message-header">'
+        f'<tr><th>Subject:</th><td>{subject}</td></tr>'
+        f'<tr><th>From:</th><td>{sender}</td></tr>'
+        f'<tr><th>Date:</th><td>{date}</td></tr>'
+        '</table><p>secret body contents</p></body></html>'
+    )
+
+
+def test_detail_metadata_preserves_displayed_date_and_headers() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from doc3gpp.parsers.listserv_detail import parse_detail_metadata
+
+    item = parse_detail_metadata(
+        _metadata_html(subject=" Topic &amp; R1-2610793 ", date=" 2026-11-13 12:00:00 +0530 "),
+        url=BASE_DETAIL_URL,
+        list_id="3gpp_tsg_ran_wg5_sig",
+    )
+    assert item.url == BASE_DETAIL_URL
+    assert item.list_id == "3GPP_TSG_RAN_WG5_SIG"
+    assert item.subject == "Topic & R1-2610793"
+    assert item.sender == "Alice <[log in to unmask]>"
+    assert item.date == datetime(2026, 11, 13, 12, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    assert item.date_precision == "datetime"
+    assert item.subject_tdocs == ("R1-2610793",)
+    assert item.week == "2026-11-W2"
+
+
+def test_detail_metadata_date_only() -> None:
+    from datetime import datetime
+
+    from doc3gpp.parsers.listserv_detail import parse_detail_metadata
+
+    item = parse_detail_metadata(_metadata_html(date="2026-11-22"), url=BASE_DETAIL_URL, list_id="example")
+    assert item.date == datetime(2026, 11, 22)
+    assert item.date_precision == "date"
+    assert item.week == "2026-11-W4"
+
+
+def test_detail_metadata_accepts_public_etsi_td_header_shape() -> None:
+    from doc3gpp.parsers.listserv_detail import parse_detail_metadata
+
+    html = '''<table><tr><td scope="row"><b>Subject:</b></td><td><div><a href="#">Topic R1-2610793</a></div></td></tr>
+    <tr><td scope="row"><b>From:</b></td><td><div>Alice &lt;<a href="#">[log in to unmask]</a>&gt;</div></td></tr>
+    <tr><td scope="row"><b>Date:</b></td><td><div>Fri, 13 Nov 2026 13:55:46 +0000</div></td></tr></table>'''
+    item = parse_detail_metadata(html, url=BASE_DETAIL_URL, list_id="example")
+    assert item.subject == "Topic R1-2610793"
+    assert item.sender == "Alice <[log in to unmask]>"
+    assert item.date.isoformat() == "2026-11-13T13:55:46+00:00"
+    assert item.week == "2026-11-W2"
+
+
+@pytest.mark.parametrize("html", [
+    "",
+    '<html><title>Login required</title><body>secret body contents</body></html>',
+    _metadata_html().replace('<tr><th>Subject:</th><td>Topic R1-2610793</td></tr>', ''),
+    _metadata_html(subject=""),
+    _metadata_html(sender=""),
+    _metadata_html(date=""),
+    _metadata_html(date="not a date"),
+    _metadata_html().replace('</table>', '<tr><th>From:</th><td>Duplicate</td></tr></table>'),
+    _metadata_html().replace(
+        "<tr><th>Subject:</th><td>Topic R1-2610793</td></tr>",
+        "<tr><th>Subject:</th><td>Topic R1-2610793</td><th>Subject:</th><td>Duplicate</td></tr>",
+    ),
+])
+def test_detail_metadata_rejects_incomplete_or_ambiguous_headers_safely(html: str) -> None:
+    from doc3gpp.parsers.listserv_detail import ListservDetailParseError, parse_detail_metadata
+
+    with pytest.raises(ListservDetailParseError) as caught:
+        parse_detail_metadata(html, url=BASE_DETAIL_URL, list_id="example")
+    assert "secret body contents" not in str(caught.value)
+
+
 def test_parse_message_body_escapes_arbitrary_html_tags_and_outlook_reply_blocks() -> None:
     from doc3gpp.parsers.listserv_detail import extract_tdocs, parse_message_body
 

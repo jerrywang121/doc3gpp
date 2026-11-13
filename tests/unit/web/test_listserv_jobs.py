@@ -344,6 +344,79 @@ def test_worker_marks_clean_run_succeeded(monkeypatch):
     assert repo.succeeded["summary"]["processed"] == 2
 
 
+@pytest.mark.parametrize("reason", [None, "HTTP 500", "Index update failed (RuntimeError)"])
+def test_parse_item_worker_thread_failure_and_shared_embedder(monkeypatch, reason):
+    url = "https://list.etsi.org/scripts/wa.exe?A2=TEAM_X;abc.2611B&S="
+    main = threading.current_thread()
+    seen = {}
+    provider = lambda: object()
+
+    class Service:
+        def parse_item(self, item, **kwargs):
+            seen.update(item=item, kwargs=kwargs, thread=threading.current_thread())
+            kwargs["on_progress"]("item parsed")
+            return ListservBatchResult(1, 0, {} if reason is None else {item: reason})
+
+        def close(self):
+            seen["close_thread"] = threading.current_thread()
+
+    def build(settings=None, *, embedder_factory=None):
+        seen["provider"] = embedder_factory
+        return Service()
+
+    monkeypatch.setattr(factory, "build_listserv_parse_service", build)
+    kind = JobKind.LISTSERV_PARSE_ITEM
+    repo = _Repo(_job(kind, url=url, force=True))
+    state = _worker_state(repo, listserv_embedder_factory=provider)
+
+    async def go():
+        task = asyncio.create_task(JobWorker(state).run())
+        for _ in range(100):
+            if repo.status in (JobStatus.FAILED, JobStatus.SUCCEEDED):
+                break
+            await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(go())
+    assert repo.status == (JobStatus.SUCCEEDED if reason is None else JobStatus.FAILED)
+    summary = (repo.succeeded if reason is None else repo.failed)["summary"]
+    assert summary["url"] == url and summary["list_id"] == "TEAM_X"
+    assert summary["failed"] == int(reason == "HTTP 500")
+    assert summary["index_failed"] == int(reason is not None and reason.startswith("Index"))
+    if summary["index_failed"]:
+        assert "source data was committed" in summary["message"] and "--rebuild" in summary["message"]
+    assert seen["thread"] is seen["close_thread"] and seen["thread"] is not main
+    assert seen["provider"] is provider and seen["item"] == url
+    assert seen["kwargs"]["force"] is True and callable(seen["kwargs"]["cancelled"])
+
+
+def test_parse_item_handler_cancellation_closes_service(monkeypatch):
+    state = {}
+
+    class Service:
+        def parse_item(self, _url, **kwargs):
+            state["cancel"].set()
+            assert kwargs["cancelled"]()
+            return ListservBatchResult(0, 1, {})
+
+        def close(self):
+            state["closed"] = True
+
+    monkeypatch.setattr(factory, "build_listserv_parse_service", lambda settings=None: Service())
+    kind = JobKind.LISTSERV_PARSE_ITEM
+    job = _job(kind, url="https://list.etsi.org/scripts/wa.exe?A2=X;abc.2611B&S=")
+
+    async def go():
+        coro, cancel, _logs = await _invoke(kind, SimpleNamespace(), job)
+        state["cancel"] = cancel
+        with pytest.raises(asyncio.CancelledError):
+            await coro
+
+    asyncio.run(go())
+    assert state["closed"]
+
+
 def test_stdio_shutdown_waits_for_listserv_thread_before_closing_resources(monkeypatch):
     started = threading.Event()
     release = threading.Event()
@@ -472,6 +545,46 @@ def _detail(body_url):
         f'<tr><th>Parts/Attachments:</th><td><a href="{body_url}">text/plain</a></td></tr>'
         "</table></body></html>"
     )
+
+
+def test_parse_item_worker_index_failure_keeps_committed_message(sqlite_env, monkeypatch):
+    from doc3gpp.services.listserv_parse import ListservParseService
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.listserv_sql import SQLAlchemyListservRepository
+
+    create_schema("main")
+    url = "https://list.etsi.org/scripts/wa.exe?A2=NEW_LIST;abc.2611B&S="
+    source = _Source({url: _detail(url.replace("A2=", "A3=") + "&T=text%2Fplain")})
+    body = url.replace("A2=", "A3=") + "&T=text%2Fplain"
+    source.pages[body] = "body text"
+    repo = SQLAlchemyListservRepository()
+
+    class BrokenIndex:
+        def update_records(self, records, *, operation):
+            raise RuntimeError("index unavailable")
+
+    service = ListservParseService(repo, source=source, index_service=BrokenIndex())
+    monkeypatch.setattr(factory, "build_listserv_parse_service", lambda settings=None: service)
+    kind = JobKind.LISTSERV_PARSE_ITEM
+    jobs = _Repo(_job(kind, url=url))
+    state = _worker_state(jobs)
+
+    async def run():
+        task = asyncio.create_task(JobWorker(state).run())
+        for _ in range(100):
+            if jobs.status in (JobStatus.FAILED, JobStatus.SUCCEEDED):
+                break
+            await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+    assert jobs.status == JobStatus.FAILED
+    assert jobs.failed["summary"]["index_failed"] == 1
+    assert jobs.failed["summary"]["failed"] == 0
+    assert "--rebuild" in jobs.failed["error"]
+    assert repo.has_list("NEW_LIST") and repo.get(url).detail.content == "body text"
+    assert source.closed and not source.closed_while_fetching
 
 
 def test_sync_handler_cancel_passes_event_and_stops_later_pages(sqlite_env, monkeypatch):

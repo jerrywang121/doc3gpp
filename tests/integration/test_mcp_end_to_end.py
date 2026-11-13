@@ -106,6 +106,7 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "list_jobs",
         "listserv_sync",
         "listserv_parse",
+        "listserv_parse_item",
         "listserv_list",
         "listserv_search",
         "listserv_show",

@@ -50,6 +50,7 @@ class JobKind(str, Enum):
     CACHE_PURGE = "cache_purge"
     LISTSERV_SYNC = "listserv_sync"
     LISTSERV_PARSE = "listserv_parse"
+    LISTSERV_PARSE_ITEM = "listserv_parse_item"
     LISTSERV_INDEX = "listserv_index"
 
 

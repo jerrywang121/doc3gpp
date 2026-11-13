@@ -88,13 +88,21 @@ cache recovery, semantic freshness, or resource ownership. In particular,
 do not confuse SQL completeness with derived-cache availability or make a
 snapshot content read silently download/parse.
 
-For LISTSERV changes, preserve public-host-only transport, catalog registration
-only after a date-matching message, actual-page URL coverage, the separate
+For LISTSERV changes, preserve public-host-only transport, sync catalog
+registration only after a date-matching message, actual-page URL coverage, the separate
 sync/parse boundary, SQL-only read paths, independent source/index state, and
 shared HTTP/MCP/CLI payload serializers. Keep ORM/schema reporting aligned and
 never add attachment downloads or implicit read-time work. Catalog listings
 return immutable `ListservList` records; retain the `list_ids` compatibility
-array and do not expose ORM entities.
+array and do not expose ORM entities. List-ID and TSG catalog filters intersect
+in SQL; the portal catalog is independent of message-search filters and its
+suggestions remain unfiltered.
+Explicit parse-item accepts a validated public A2 item URL, registers an unknown
+list only with a successful atomic message/detail commit, and creates no archive
+coverage. It skips parsed items unless forced, preserves existing metadata and
+supports stored URL aliases with or without the empty `&S=` suffix. Source and
+index failures remain distinct; neither parsing nor discovery downloads
+attachments.
 Sync selects A1 archive months overlapping requested dates plus one neighboring
 month on each side; displayed message dates farther from the page label may be
 missed. Force refreshes selected pages but does not expand that selection.

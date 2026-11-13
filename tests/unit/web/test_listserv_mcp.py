@@ -134,7 +134,7 @@ def test_listserv_batch_tools_enqueue_shared_job_kinds(name: str, kind: JobKind)
 def test_listserv_read_tools_serialize_empty_arrays_and_status_as_json() -> None:
     state, _ = _state()
     server = build_mcp_server(state)
-    state.services.listserv.list_lists = list
+    state.services.listserv.list_lists = lambda *, list_id=None, tsg=None: []
 
     assert _json_call(server, "listserv_list", {}) == {
         "list_ids": [],

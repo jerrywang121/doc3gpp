@@ -330,7 +330,7 @@ class JobWorker:
                     item_type = "TDocs" if job.kind is JobKind.PARSE_TDOCS else "spec docs"
                     logger.info("job %s failed (all %s failed)", job.id, item_type)
                     return
-                if job.kind in (JobKind.LISTSERV_SYNC, JobKind.LISTSERV_PARSE):
+                if job.kind in (JobKind.LISTSERV_SYNC, JobKind.LISTSERV_PARSE, JobKind.LISTSERV_PARSE_ITEM):
                     error = failure_error(summary)
                     if error is not None:
                         self._enqueue(

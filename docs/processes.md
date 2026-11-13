@@ -457,8 +457,9 @@ counts refer to selected pages; out-of-range A1 pages are not counted.
 The main database has a LISTSERV catalog populated with reference entries during
 main-schema initialization. Initialization is repeatable and inserts missing
 rows without overwriting locally maintained TSG or description metadata. A
-previously unknown ID is registered only when a successfully parsed archive page
-contains at least one message matching the requested date filters. For that
+previously unknown ID discovered by sync is registered only when a successfully
+parsed archive page contains at least one message matching the requested date
+filters. For that
 unknown list, successful zero-match pages and their pagination links are held in
 memory while sync follows the links. Once a matching page registers the list,
 the buffered pages are committed; each page's messages, coverage, and next links
@@ -467,6 +468,8 @@ buffers are discarded and no list or coverage is persisted, so those pages can
 be fetched again. A recognized TSG code is used only when it exists in the
 TSG table; otherwise discovered TSG metadata and all new descriptions are null.
 Existing catalog metadata is never recomputed during discovery.
+Explicit single-item parsing has a separate discovery rule: a previously unknown
+list is registered only when that message and its detail commit successfully.
 
 Main-schema initialization also performs a targeted upgrade for legacy SQLite
 databases: IDs found in old message or archive-page rows are backfilled into the
@@ -506,6 +509,10 @@ finally:
 parse_service = build_listserv_parse_service()
 try:
     parse_result = parse_service.parse("3GPP_TSG_RAN_WG5")
+    item_result = parse_service.parse_item(
+        "https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=",
+        force=True,
+    )
 finally:
     parse_service.close()
 
@@ -544,6 +551,20 @@ fetched and parsed, but named attachments are metadata only and their bytes are
 never fetched. `multipart/related` and text alternatives are body
 representations, not downloadable attachments.
 
+`doc3gpp listserv parse-item URL` explicitly fetches one public detail page,
+without an earlier sync or an archive-page scan. Its accepted form is
+`https://list.etsi.org/scripts/wa.exe?A2=<list_id>;<item_id>.<YYMM[A-E]>&S=`;
+the empty `&S=` is optional. Both variants identify the same item, and existing
+stored URL keys are retained when a later parse or sync encounters an alias.
+For a new message, subject, sender, and displayed date come from its detail
+page; its week follows the displayed date rather than the URL's archive group.
+An unambiguous valid header and successful body parsing are required. The list,
+message, and detail commit atomically, without creating archive-page coverage;
+failures leave previously stored data unchanged. Existing message and catalog
+metadata are not overwritten by this operation. Already parsed details are
+skipped unless forced. The ordinary index hooks run after the source commit, so
+an index error leaves the new source available for a later index rebuild.
+
 The parser removes recognizable quoted-reply/forward sections conservatively,
 using structural HTML quote boundaries, plain-text delimiters, and groups of
 reply headers, including bold labels rendered from HTML and headers separated by
@@ -572,6 +593,10 @@ messages. The service returns immutable `ListservList` records with `list_id`,
 `tsg`, and `description`, ordered by ID; `list_ids()` remains a compatibility
 view of those catalog IDs. Show requires the exact detail URL and returns the
 full **stored** body only; it cannot recover truncated text.
+Optional catalog list-ID and TSG rich LIKE filters intersect in SQL; the HTTP
+and MCP `lists` and compatibility `list_ids` arrays describe the same filtered
+records. The portal's catalog filters are independent of message search, and its
+suggestions remain unfiltered.
 
 Search modes match the shared facades: `text` uses FTS5, `semantic` uses vector
 search, both use hybrid RRF, and neither uses source-SQL filters only. The
@@ -610,9 +635,10 @@ support is optional; FTS/filter-only paths are independent of it.
 
 ### Background jobs and shutdown
 
-HTTP, UI, and both MCP transports enqueue LISTSERV sync, parse, and index jobs
-through the existing single-process worker. Job kinds are `listserv_sync`,
-`listserv_parse`, and `listserv_index`; statuses follow `queued`, `running`,
+HTTP, UI, and both MCP transports enqueue LISTSERV sync, parse, parse-item, and
+index jobs through the existing single-process worker. Job kinds are
+`listserv_sync`, `listserv_parse`, `listserv_parse_item`, and `listserv_index`;
+statuses follow `queued`, `running`,
 `succeeded`, `failed`, or `cancelled`. Sync/parse summaries report `processed`,
 `skipped`, source `failed`/`failures`, derived `index_failed`/`index_failures`,
 and `message`. A job with source or index failures is `failed`; an index failure

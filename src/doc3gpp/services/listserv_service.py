@@ -22,9 +22,11 @@ class ListservService:
     def __init__(self, repository: ListservRepository) -> None:
         self._repository = repository
 
-    def list_lists(self) -> list[ListservList]:
-        """Return catalog entries ordered by list ID without network access."""
-        return self._repository.list_lists()
+    def list_lists(
+        self, *, list_id: str | None = None, tsg: str | None = None
+    ) -> list[ListservList]:
+        """Return filtered catalog entries ordered by list ID without network access."""
+        return self._repository.list_lists(list_id=list_id, tsg=tsg)
 
     def list_ids(self) -> list[str]:
         """Return catalog list IDs in ascending order without network access."""

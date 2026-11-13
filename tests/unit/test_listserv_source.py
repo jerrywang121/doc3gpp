@@ -82,6 +82,59 @@ def test_archive_index_url_targets_encoded_a0_parameter() -> None:
     assert url == "https://list.etsi.org/scripts/wa.exe?A0=3GPP_TSG_RAN_WG1"
 
 
+ITEM_URL = "https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S="
+
+
+def test_item_url_canonical_identity_and_aliases() -> None:
+    from doc3gpp.scraping.listserv_source import (
+        listserv_item_url_aliases,
+        validate_listserv_item_url,
+    )
+
+    assert validate_listserv_item_url(ITEM_URL) == (ITEM_URL, "3GPP_TSG_RAN_WG5_SIG")
+    assert validate_listserv_item_url(ITEM_URL.removesuffix("&S=")) == (
+        ITEM_URL, "3GPP_TSG_RAN_WG5_SIG"
+    )
+    assert set(listserv_item_url_aliases(ITEM_URL)) == {ITEM_URL, ITEM_URL.removesuffix("&S=")}
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        ITEM_URL.replace("https://", "http://"),
+        ITEM_URL.replace("list.etsi.org", "evil.example"),
+        ITEM_URL.replace("list.etsi.org", "user@list.etsi.org"),
+        ITEM_URL.replace("list.etsi.org", "list.etsi.org:444"),
+        ITEM_URL.replace("/scripts/wa.exe", "/scripts/other"),
+        ITEM_URL + "#fragment",
+        ITEM_URL.replace("A2=", "A0="),
+        ITEM_URL + "&A2=OTHER;abc.2611A",
+        ITEM_URL.replace("3GPP_TSG_RAN_WG5_SIG", ""),
+        ITEM_URL.replace("5d45a78f", ""),
+        ITEM_URL.replace("2611B", ""),
+        ITEM_URL.replace("2611B", "2613B"),
+        ITEM_URL.replace("2611B", "2611F"),
+        ITEM_URL.replace(";", ""),
+        ITEM_URL + "&X=1",
+        ITEM_URL + "value",
+        ITEM_URL + "&S=",
+        ITEM_URL.replace("/scripts/wa.exe", "/file.pdf"),
+        " " + ITEM_URL,
+        ITEM_URL + "\n",
+        ITEM_URL.replace(";", "%3B"),
+        ITEM_URL.replace("&S=", "%26S%3D"),
+    ],
+)
+def test_item_url_rejects_unsafe_or_malformed_input(bad_url: str) -> None:
+    from doc3gpp.scraping.listserv_source import validate_listserv_item_url
+
+    with (
+        patch.object(ListservSource, "fetch", side_effect=AssertionError("network used")),
+        pytest.raises(ValueError),
+    ):
+        validate_listserv_item_url(bad_url)
+
+
 def test_archive_index_url_preserves_unicode_without_allowlist() -> None:
     url = archive_index_url("  custom_list_ümlaut-1  ")
     assert url == "https://list.etsi.org/scripts/wa.exe?A0=CUSTOM_LIST_%C3%9CMLAUT-1"

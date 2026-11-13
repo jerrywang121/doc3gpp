@@ -216,6 +216,156 @@ def parse_service(
     )
 
 
+ITEM_URL = "https://list.etsi.org/scripts/wa.exe?A2=NEW_LIST;abc.2610A&S="
+ITEM_BODY = "https://list.etsi.org/scripts/wa.exe?A3=ind2610A&L=NEW_LIST&P=101&T=text%2Fplain"
+
+
+def test_parse_item_discovers_unknown_list_and_extracts_complete_detail(repository):
+    attachment = "https://list.etsi.org/att/R1-2610793_summary.docx"
+    html = _detail_html(
+        body_links=[(ITEM_BODY, "text/plain")],
+        attachments=[(attachment, "R1-2610793_summary.docx")],
+    ).replace("Test Subject", "Subject RP-2601234")
+    source = RecordingFakeSource(pages={
+        ITEM_URL: html,
+        ITEM_BODY: FetchedPage(
+            text="0123456789 C6-250028", content_type="text/plain", final_url=ITEM_BODY
+        ),
+    })
+    service = ListservParseService(repository=repository, source=source, max_content_chars=10)
+
+    assert service.parse_item(ITEM_URL.removesuffix("&S=")) == ListservBatchResult(1, 0, {})
+    assert source.requests == [ITEM_URL, ITEM_BODY]
+    record = repository.get(ITEM_URL)
+    assert record is not None and record.detail is not None
+    assert record.message.subject == "Subject RP-2601234"
+    assert record.message.sender == "Alice <[log in to unmask]>"
+    assert record.message.week == "2026-10-W1"
+    assert record.message.subject_tdocs == ("RP-2601234",)
+    assert record.detail.content == "0123456789"
+    assert record.detail.content_truncated
+    assert record.detail.tdocs == ("C6-250028", "R1-2610793")
+    assert record.detail.attachments == (ListservAttachment("R1-2610793_summary.docx", attachment),)
+    assert repository.has_list("NEW_LIST")
+    assert repository.get_coverage(ArchivePage(
+        list_id="NEW_LIST", url="https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=NEW_LIST",
+        period="2026-10-W1",
+    )).intervals == ()
+    service.close()
+    assert source.closed
+
+
+@pytest.mark.parametrize("stored_with_suffix", [False, True])
+def test_parse_item_existing_alias_unparsed_skip_force_and_sync(repository, stored_with_suffix):
+    stored = ITEM_URL if stored_with_suffix else ITEM_URL.removesuffix("&S=")
+    supplied = ITEM_URL.removesuffix("&S=") if stored_with_suffix else ITEM_URL
+    page = ArchivePage(
+        list_id="NEW_LIST", url="https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=NEW_LIST",
+        period="2026-10-W1",
+    )
+    repository.commit_page(page, [_make_message(stored, list_id="NEW_LIST", subject="Known")],
+                           parse_date_set(["= 2026-10-01"]), ())
+    source = RecordingFakeSource(pages={stored: _detail_html(inline_body_html="<p>First body</p>")})
+    service = ListservParseService(repository=repository, source=source)
+    assert service.parse_item(supplied) == ListservBatchResult(1, 0, {})
+    assert source.requests == [stored]
+    assert repository.get(stored).message.subject == "Known"
+    assert repository.get(supplied) is None
+    source.clear_requests()
+    assert service.parse_item(supplied) == ListservBatchResult(0, 1, {})
+    assert not source.requests
+    assert service.parse_item(supplied, force=True) == ListservBatchResult(1, 0, {})
+    assert source.requests == [stored]
+    repository.commit_page(page, [_make_message(ITEM_URL, list_id="NEW_LIST", subject="Updated")],
+                           parse_date_set(["= 2026-10-01"]), ())
+    assert repository.get(stored).detail is not None
+    if not stored_with_suffix:
+        assert repository.get(ITEM_URL) is None
+
+
+def test_parse_item_new_message_on_known_list(repository):
+    first = ITEM_URL.replace(";abc.", ";first.")
+    page = ArchivePage(list_id="NEW_LIST", url="https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=NEW_LIST", period="2026-10-W1")
+    repository.commit_page(page, [_make_message(first, list_id="NEW_LIST")],
+                           parse_date_set(["= 2026-10-01"]), ())
+    source = RecordingFakeSource(pages={ITEM_URL: _detail_html()})
+    result = ListservParseService(repository=repository, source=source).parse_item(ITEM_URL)
+    assert result == ListservBatchResult(1, 0, {})
+    assert repository.get(ITEM_URL).detail is not None
+    assert repository.get(first) is not None
+
+
+@pytest.mark.parametrize("html", [
+    "<html>login required SECRET</html>",
+    _detail_html().replace("<tr><th>From:</th><td>Alice &lt;[log in to unmask]&gt;</td></tr>", ""),
+    _detail_html().replace("</table>", "<tr><th>Subject:</th><td>SECRET</td></tr></table>"),
+    _detail_html().replace(
+        "<tr><th>Subject:</th><td>Test Subject</td></tr>",
+        "<tr><th>Subject:</th><td>Test Subject</td><th>Subject:</th><td>SECRET</td></tr>",
+    ),
+])
+def test_parse_item_bad_headers_do_not_persist_or_leak(repository, html):
+    source = RecordingFakeSource(pages={ITEM_URL: html})
+    result = ListservParseService(repository=repository, source=source).parse_item(ITEM_URL)
+    assert result.processed == 0 and result.failures
+    assert "SECRET" not in str(result.failures)
+    assert not repository.has_list("NEW_LIST")
+    assert repository.get(ITEM_URL) is None
+
+
+def test_parse_item_body_and_commit_failures_keep_database_clean(repository, monkeypatch):
+    source = RecordingFakeSource(pages={ITEM_URL: _detail_html(body_links=[(ITEM_BODY, "text/plain")])})
+    service = ListservParseService(repository=repository, source=source)
+    assert service.parse_item(ITEM_URL).failures
+    assert not repository.has_list("NEW_LIST") and repository.get(ITEM_URL) is None
+    source.pages[ITEM_BODY] = FetchedPage(text="body SECRET", content_type="text/plain", final_url=ITEM_BODY)
+    def broken_save(message, detail):
+        raise RuntimeError("SECRET")
+    monkeypatch.setattr(repository, "save_parsed_item", broken_save)
+    result = service.parse_item(ITEM_URL)
+    assert result.failures and "SECRET" not in str(result.failures)
+    assert not repository.has_list("NEW_LIST") and repository.get(ITEM_URL) is None
+
+
+def test_parse_item_forced_failure_cancellation_and_invalid_url(repository):
+    source = RecordingFakeSource(pages={ITEM_URL: _detail_html(inline_body_html="<p>Good</p>")})
+    service = ListservParseService(repository=repository, source=source)
+    assert service.parse_item(ITEM_URL).processed == 1
+    old = repository.get(ITEM_URL).detail
+    source.pages[ITEM_URL] = _detail_html(body_links=[(ITEM_BODY, "text/plain")])
+    assert service.parse_item(ITEM_URL, force=True).failures
+    assert repository.get(ITEM_URL).detail == old
+    source.clear_requests()
+    assert service.parse_item(ITEM_URL, force=True, cancelled=lambda: True) == ListservBatchResult(0, 1, {})
+    assert not source.requests
+    with pytest.raises(ValueError):
+        service.parse_item("https://evil.example/SECRET")
+    assert not source.requests
+
+
+def test_parse_item_index_failure_keeps_committed_source(repository):
+    from doc3gpp.models.listserv_failures import is_index_failure
+
+    class BrokenIndex:
+        closed = False
+        def update_records(self, records, *, operation):
+            assert operation == "parse" and repository.get(ITEM_URL).detail is not None
+            raise RuntimeError("SECRET")
+        def close(self):
+            self.closed = True
+
+    index = BrokenIndex()
+    source = RecordingFakeSource(pages={ITEM_URL: _detail_html()})
+    service = ListservParseService(repository=repository, source=source,
+                                   index_service=index, owns_index_service=True)
+    result = service.parse_item(ITEM_URL)
+    assert result.processed == 1 and is_index_failure(result.failures[ITEM_URL])
+    assert "SECRET" not in str(result.failures)
+    assert repository.has_list("NEW_LIST") and repository.get(ITEM_URL).detail is not None
+    service.close()
+    assert index.closed and source.closed
+
+
 def test_parse_extracts_id_beyond_storage_limit(parse_service, repository, message_url):
     result = parse_service.parse("EXAMPLE")  # fixture body: ten characters followed by R1-2610793; limit=10
     detail = repository.get(message_url).detail

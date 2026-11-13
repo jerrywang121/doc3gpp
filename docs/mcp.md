@@ -119,7 +119,7 @@ The authoritative registration is
 | Sync | `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`, `sync_all_tdocs`, `sync_specs`, `sync_testcases` |
 | Extract | `parse_tdocs`, `parse_tdoc_url`, `parse_spec_docs` |
 | Maintain indexes | `index_tdocs`, `index_spec_docs` |
-| LISTSERV archives | `listserv_sync`, `listserv_parse`, `listserv_index_rebuild` |
+| LISTSERV archives | `listserv_sync`, `listserv_parse`, `listserv_parse_item`, `listserv_index_rebuild` |
 | Purge / cancel | `purge_cache`, `cancel_job` |
 
 Do not infer a tool from an HTTP route: for example HTTP exposes WI sync, but
@@ -199,7 +199,8 @@ The shared registry adds these LISTSERV tools to both stdio and HTTP MCP:
 | --- | --- |
 | `listserv_sync` | Required exact `list_id`; optional repeatable `date` string array and `force`; enqueues sync |
 | `listserv_parse` | Required exact `list_id`; optional repeatable `date` string array and `force`; parses stored messages |
-| `listserv_list` | No arguments; returns the shared catalog JSON `{"list_ids":[...],"lists":[{"list_id":"...","tsg":null,"description":null}]}` |
+| `listserv_parse_item` | Required public detail `url`; optional `force`; enqueues one message, including unsynced items |
+| `listserv_list` | Optional rich-LIKE `list_id` and `tsg` filters; returns the shared catalog JSON `{"list_ids":[...],"lists":[{"list_id":"...","tsg":null,"description":null}]}` |
 | `listserv_search` | Optional `date`, `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit`, `offset`; returns search payload array |
 | `listserv_show` | Required exact stored detail `url`; returns full stored-record payload |
 | `listserv_index_status` | No arguments; returns FTS/vector status |
@@ -212,6 +213,10 @@ and `description`; nullable metadata is JSON `null`. The catalog includes seeded
 and discovered entries without requiring stored messages. Date filters use the
 shared displayed-date comparison grammar. Read and status tools use SQL-backed
 services and do not fetch or parse upstream content.
+Catalog filters intersect and use `%` / `_` wildcards, `!` negation, and
+`null` / `not-null` SQL nullability tokens; plain values match exactly. Both
+payload arrays contain the same filtered IDs. HTTP `GET /api/listserv/lists`
+accepts the same `list_id` and `tsg` query parameters.
 Search returns the same serialized fields as HTTP, including `url`, `tdocs`,
 `content_truncated`, and the separate `preview_truncated`; show returns the
 complete stored body only. MCP wraps each returned JSON string in its tool
@@ -223,11 +228,17 @@ For `tdocs`, stored IDs are comma-delimited; use a contains pattern such as
 Mutations reuse the existing queue. Enqueue results contain exactly `job_id`,
 `status`, `message`, and `links`; `links` contains the job-detail `self` link and
 the SSE `events` link. Call `get_job(job_id)` to fetch later progress and result
-summaries. The job kinds are `listserv_sync`, `listserv_parse`, and
-`listserv_index`. Sync and parse summaries separate source `failed`/`failures`
-from derived `index_failed`/`index_failures`; index failures do not undo source
-commits. The separate `get_job` response retains its normal job fields and
-result summary.
+summaries. The job kinds are `listserv_sync`, `listserv_parse`,
+`listserv_parse_item`, and `listserv_index`. Sync, parse, and parse-item summaries
+separate source `failed`/`failures` from derived `index_failed`/`index_failures`;
+index failures do not undo source commits. The separate `get_job` response
+retains its normal job fields and result summary.
+`listserv_parse_item` accepts the public A2 detail URL shown below, with or
+without the empty `&S=` suffix. It skips an already parsed item unless forced.
+A successful parse atomically registers an unknown list and stores its message
+and detail without syncing archive pages or creating coverage. Failed source
+parses leave prior data intact; index failures leave source committed. The body
+representation may be fetched, but attachment bytes are never downloaded.
 Running cancellation is cooperative. LISTSERV job services close their owned
 source/index resources on the worker thread and borrow the app's shared
 embedder. Stdio shutdown drains in-flight blocking handlers and their worker
@@ -252,6 +263,14 @@ result = await session.call_tool(
 if result.isError:
     raise RuntimeError(result.content[0].text)
 print(result.content[0].text)  # JSON text; the tool result wraps this payload.
+
+queued = await session.call_tool(
+    "listserv_parse_item",
+    arguments={
+        "url": "https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=",
+        "force": True,
+    },
+)
 ```
 
 Use `tools/list` for the live tool schema;

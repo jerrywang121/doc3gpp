@@ -24,9 +24,37 @@
     {% for list_id in list_ids %}<option value="{{ list_id }}">{% endfor %}
   </datalist>
 
+  <section class="card" id="listserv-catalog">
+    <h2>List catalog</h2>
+    <form method="get" action="/listserv" class="filters">
+      <label>List ID filter
+        <input name="catalog_list_id" value="{{ catalog_filters.list_id or '' }}" placeholder="All lists or a rich filter">
+      </label>
+      <label>TSG filter <input name="catalog_tsg" value="{{ catalog_filters.tsg or '' }}"></label>
+      {% for name in ("list_id", "sender", "subject", "tdocs") %}
+        {% if filters[name] is not none %}<input type="hidden" name="{{ name }}" value="{{ filters[name] }}">{% endif %}
+      {% endfor %}
+      {% for value in date_filters %}<input type="hidden" name="date" value="{{ value }}">{% endfor %}
+      {% if text %}<input type="hidden" name="text" value="{{ text }}">{% endif %}
+      {% if semantic %}<input type="hidden" name="semantic" value="{{ semantic }}">{% endif %}
+      <input type="hidden" name="limit" value="{{ limit }}">
+      <input type="hidden" name="offset" value="{{ offset }}">
+      <button type="submit" class="btn primary">Filter lists</button>
+    </form>
+    {% if catalog_entries %}
+      <ul>
+        {% for entry in catalog_entries %}
+          <li>{% if entry.url %}<a href="{{ entry.url }}">{{ entry.item.list_id }}</a>{% else %}{{ entry.item.list_id }}{% endif %}{% if entry.item.tsg %} · {{ entry.item.tsg }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+    {% else %}<p>No stored lists match these filters.</p>{% endif %}
+  </section>
+
   <section class="card">
     <h2>Search stored messages</h2>
     <form method="get" action="/listserv" class="filters">
+      {% if catalog_filters.list_id is not none %}<input type="hidden" name="catalog_list_id" value="{{ catalog_filters.list_id }}">{% endif %}
+      {% if catalog_filters.tsg is not none %}<input type="hidden" name="catalog_tsg" value="{{ catalog_filters.tsg }}">{% endif %}
       <label>List ID filter
         <input type="text" name="list_id" list="listserv-list-id-suggestions"
                value="{{ filters.list_id or '' }}" placeholder="All lists or a rich filter">
@@ -40,7 +68,6 @@
       <label>Page size <input type="number" name="limit" min="1" max="150" value="{{ limit }}"></label>
       <button type="submit" class="btn primary">Search</button>
     </form>
-    <p class="meta">List IDs: {% if list_ids %}{{ list_ids|join(", ") }}{% else %}No stored lists{% endif %}</p>
     {% include "partials/listserv_results.html" %}
   </section>
 
@@ -84,6 +111,19 @@
       <button type="submit" class="btn primary">Queue parse</button>
       <span class="sync-queued" data-label="Parse job queued" style="display:none">Parse job queued</span>
       <div id="listserv-parse-form-job-target"></div>
+      <p><a href="/jobs">View jobs</a></p>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Parse one email</h2>
+    <p>Fetch one public email URL, including messages not yet synced.</p>
+    <form id="listserv-parse-item-form" class="sync-form" method="post" action="/api/listserv/parse-item">
+      <label>Email item URL <input type="url" name="url" required placeholder="https://list.etsi.org/scripts/wa.exe?A2=LIST;item.2611B&amp;S="></label>
+      <label class="inline-check"><input type="checkbox" name="force"> Force parse</label>
+      <button type="submit" class="btn primary">Queue item parse</button>
+      <span class="sync-queued" data-label="Item parse job queued" style="display:none">Item parse job queued</span>
+      <div id="listserv-parse-item-form-job-target"></div>
       <p><a href="/jobs">View jobs</a></p>
     </form>
   </section>

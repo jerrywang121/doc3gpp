@@ -33,6 +33,17 @@ NONSTANDARD_PORT_URL = (
 )
 
 
+def test_parse_item_portal_form(client):
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(client.get("/listserv").text, "html.parser")
+    form = soup.select_one("#listserv-parse-item-form")
+    assert form is not None and form["action"] == "/api/listserv/parse-item"
+    assert form.select_one('input[name="url"]') is not None
+    assert form.select_one('input[name="force"][type="checkbox"]') is not None
+    assert soup.select_one("#listserv-sync-form") and soup.select_one("#listserv-parse-form")
+
+
 def _message(url: str, subject: str, day: int) -> ListservMessage:
     return ListservMessage(
         url=url,
@@ -144,6 +155,67 @@ def test_listserv_page_renders_filters_preview_truncation_and_pagination(
     assert "Stored content was truncated" in response.text
     assert "next" in response.text
     assert "offset=1" in response.text
+
+
+def test_catalog_panel_filters_independently_and_preserves_search_state(client: TestClient) -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    from bs4 import BeautifulSoup
+
+    params = {
+        "catalog_list_id": LIST_ID,
+        "catalog_tsg": "R1",
+        "list_id": LIST_ID,
+        "subject": "%Topic%",
+        "limit": "1",
+    }
+    response = client.get("/listserv", params=params)
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    catalog = soup.select_one("#listserv-catalog")
+    assert catalog is not None
+    assert response.text.index("List catalog") < response.text.index("Search stored messages")
+    links = catalog.select("a[href]")
+    assert [(link.get_text(strip=True), link["href"]) for link in links] == [
+        (LIST_ID, f"https://list.etsi.org/scripts/wa.exe?A0={LIST_ID}")
+    ]
+    assert soup.select_one('#listserv-results ul.listserv-results') is not None
+    assert soup.select_one('form[action="/listserv"] input[name="list_id"]')["value"] == LIST_ID
+    catalog_form = catalog.select_one("form")
+    assert catalog_form.select_one('input[name="subject"]')["value"] == "%Topic%"
+    assert catalog_form.select_one('input[name="list_id"]')["value"] == LIST_ID
+    search_form = soup.find("h2", string="Search stored messages").find_next("form")
+    assert search_form.select_one('input[name="catalog_list_id"]')["value"] == LIST_ID
+    assert search_form.select_one('input[name="catalog_tsg"]')["value"] == "R1"
+    next_link = soup.select_one('#listserv-results nav a[href*="offset=1"]')
+    query = parse_qs(urlsplit(next_link["href"]).query)
+    assert query["catalog_list_id"] == [LIST_ID] and query["catalog_tsg"] == ["R1"]
+
+    params["catalog_tsg"] = "R2"
+    no_match = BeautifulSoup(client.get("/listserv", params=params).text, "html.parser")
+    assert no_match.select_one("#listserv-catalog").select("a[href]") == []
+    assert no_match.select_one("#listserv-results ul.listserv-results") is not None
+    assert no_match.select_one(f'#listserv-list-id-suggestions option[value="{LIST_ID}"]')
+    for form_id in ("listserv-sync-form", "listserv-parse-form"):
+        assert no_match.select_one(f'#{form_id} input[name="list_id"][list="listserv-list-id-suggestions"]')
+
+
+def test_catalog_panel_escapes_unsafe_stored_ids_without_links(client: TestClient) -> None:
+    from bs4 import BeautifulSoup
+
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    unsafe = 'BAD<svg/onload=alert(1)>'
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id=unsafe))
+        session.commit()
+    response = client.get("/listserv", params={"catalog_list_id": "BAD%"})
+    assert response.status_code == 200
+    panel = BeautifulSoup(response.text, "html.parser").select_one("#listserv-catalog")
+    assert panel is not None and unsafe in panel.get_text()
+    assert panel.select("svg") == [] and panel.select("a[href]") == []
+    assert "BAD&lt;svg/onload=alert(1)&gt;" in response.text
 
 
 def test_listserv_show_escapes_upstream_values_and_preserves_parse_states(
@@ -390,7 +462,7 @@ def test_listserv_search_form_uses_rich_list_id_input_and_stored_suggestions(
     response = client.get("/listserv", params={"list_id": "SA%", "limit": 150})
     assert response.status_code == 200
     soup = BeautifulSoup(response.text, "html.parser")
-    search_form = soup.find("form", attrs={"method": "get", "action": "/listserv"})
+    search_form = soup.find("h2", string="Search stored messages").find_next("form")
     assert search_form is not None
     list_input = search_form.find("input", attrs={"name": "list_id"})
     assert list_input is not None

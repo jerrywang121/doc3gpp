@@ -1224,7 +1224,7 @@ def meeting_sync(
     """Fetch and store meetings calendar from 3GPP site.
 
     Valid --tsg values are:
-    `R1`, `R2`, `R3`, `R4`, `R5`, `RT`, `RP`,
+    `R1`, `R2`, `R3`, `R4`, `R5`, `R6`, `RT`, `RP`,
     `C1`, `C3`, `C4`, `C6`, `CP`,
     `S1`, `S2`, `S3`, `S4`, `S5`, `S6`, `SP`
 
@@ -5073,10 +5073,10 @@ def wi_sync(
 ) -> None:
     """Fetch and store active WIs for a TSG from 3gpp.org.
 
-    Valid --tsg value are:                                                                                                                                                          
-    `R1`, `R2`, `R3`, `R4`, `R5`, `RT`,                                                                                                                                             
-    `C1`, `C3`, `C4`, `C6`,                                                                                                                                                         
-    `S1`, `S2`, `S3`, `S4`, `S5`, `S6`
+    Valid --tsg values are:
+    `R1`, `R2`, `R3`, `R4`, `R5`, `R6`, `RT`, `RP`,
+    `C1`, `C3`, `C4`, `C6`, `CP`,
+    `S1`, `S2`, `S3`, `S4`, `S5`, `S6`, `SP`
     """
     logger.info("Starting WI sync for TSG %s", tsg)
     create_schema("all")
@@ -5243,7 +5243,7 @@ def spec_sync(
     """Fetch and store specs (and their versions) from 3gpp.org.
 
     Valid --tsg values are:
-    `R1`, `R2`, `R3`, `R4`, `R5`, `RT`, `RP`,
+    `R1`, `R2`, `R3`, `R4`, `R5`, `R6`, `RT`, `RP`,
     `C1`, `C3`, `C4`, `C6`, `CP`,
     `S1`, `S2`, `S3`, `S4`, `S5`, `S6`, `SP`
 

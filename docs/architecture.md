@@ -139,11 +139,14 @@ guarantees are defined in [pools and jobs](processes.md#pools-and-background-job
 Public LISTSERV messages use the existing layers: `listserv_source.py` is
 restricted HTTPS transport, archive/detail parsers are pure, services coordinate
 sync/parse/search/index over repository protocols, and CLI/HTTP/UI/MCP adapters
-share payload serializers. The ORM-backed source tables
-`listserv_messages`, `listserv_details`, and `listserv_archive_pages` live in
-the existing **main** database. LISTSERV FTS/vector data are derived sidecars
-there as well, not a fourth database or a source of truth. The schema registry
-is checked against the three LISTSERV ORM tables.
+share payload serializers. The main database owns the `listserv_list` catalog
+and the ORM-backed source tables `listserv_messages`, `listserv_details`, and
+`listserv_archive_pages`. Message and archive-page rows reference the catalog;
+details remain linked through their message. LISTSERV FTS/vector data are
+derived sidecars there as well, not a fourth database or a source of truth. The
+schema registry is checked against all four LISTSERV ORM tables. Catalog reads
+map rows to immutable `ListservList` domain records rather than exposing ORM
+entities.
 
 Each page's messages, pagination links, and date coverage commit atomically;
 parsed detail replacement is atomic per message. Source revisions drive

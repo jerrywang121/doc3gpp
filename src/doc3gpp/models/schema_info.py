@@ -18,17 +18,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from doc3gpp.models.tsg_defaults import default_tsgs
+
 FIELD_TYPES: tuple[str, ...] = ("str", "int", "bool", "date", "datetime", "text", "gzip-json")
 
 SCHEMA_FIELDS: list[str] = ["table", "field", "type", "nullable", "description", "values"]
 
-# Canonical TSG short names. Duplicates
-# ``services/tsg_service.py::_DEFAULT_TSGS`` (models/ cannot import
-# services/); equality is locked by ``test_schema_info.py``.
-TSG_SHORT_NAMES: tuple[str, ...] = (
-    "RP", "R1", "R2", "R3", "R4", "R5", "RT", "SP",
-    "S1", "S2", "S3", "S4", "S5", "S6",
-    "CP", "C1", "C3", "C4", "C6",
+# Canonical TSG names and order live with the reference definitions.
+TSG_SHORT_NAMES: tuple[str, ...] = tuple(
+    tsg.short_name for tsg in default_tsgs()
 )
 
 # Duplicates ``cli.py::VALID_TESTCASE_GROUPS`` (models/ cannot import
@@ -442,6 +440,14 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
         ),
     ),
     "listserv": (
+        TableSchema(
+            table="listserv_list",
+            fields=(
+                FieldInfo("list_id", "str", False, "Canonical uppercase LISTSERV list ID; primary key."),
+                FieldInfo("tsg", "str", True, "Optional owning 3GPP TSG short name; FK into tsgs.short_name.", TSG_SHORT_NAMES),
+                FieldInfo("description", "text", True, "Optional reference description for this LISTSERV list."),
+            ),
+        ),
         TableSchema(
             table="listserv_messages",
             fields=(

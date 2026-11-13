@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 from pydantic import Field
 
 from doc3gpp.models.jobs import JobKind
+from doc3gpp.models.listserv_payloads import listserv_lists_payload
 from doc3gpp.models.search import (
     SearchFilters,
     SearchIndexCorruptError,
@@ -1223,11 +1224,11 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
     @server.tool(
         name="listserv_list",
-        description="List distinct LISTSERV IDs represented by stored messages.",
+        description="List LISTSERV catalog entries with their IDs, TSGs and descriptions.",
     )
     @_mcp_error_guard
     def listserv_list() -> str:
-        return _to_json({"list_ids": services.listserv.list_ids()})
+        return _to_json(listserv_lists_payload(services.listserv.list_lists()))
 
     @server.tool(
         name="listserv_search",

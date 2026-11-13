@@ -275,7 +275,7 @@ def test_listserv_ui_uses_shared_job_endpoints_and_payload_modes(
 
 
 
-def test_empty_listserv_store_allows_entering_sync_and_parse_list_ids(
+def test_seeded_listserv_catalog_allows_entering_sync_and_parse_list_ids(
     sqlite_env, disable_auto_sync, monkeypatch
 ) -> None:
     def no_network(*args, **kwargs):
@@ -290,11 +290,13 @@ def test_empty_listserv_store_allows_entering_sync_and_parse_list_ids(
         response = client.get("/listserv")
 
     assert response.status_code == 200
-    assert "No stored lists" in response.text
+    assert "No stored lists" not in response.text
+    assert "3GPP_TSG_CT" in response.text
     for form_id in ("listserv-sync-form", "listserv-parse-form"):
         form = response.text.split(f'id="{form_id}"', 1)[1].split("</form>", 1)[0]
         assert '<input type="text"' in form
         assert 'name="list_id"' in form
+        assert 'value="3GPP_TSG_CT"' in form
         assert 'name="since"' in form
         assert 'name="until"' in form
         assert 'name="dates"' not in form
@@ -348,7 +350,6 @@ def test_listserv_search_form_uses_rich_list_id_input_and_stored_suggestions(
     from bs4 import BeautifulSoup
 
     repository = SQLAlchemyListservRepository()
-    messages = []
     for list_id, subject in (("SA1", "SA1 handover"), ("SA2", "SA2 handover"), ("CT1", "CT1 handover")):
         message_url = (
             "https://list.etsi.org/scripts/wa.exe?A2=ind2610A"
@@ -378,7 +379,13 @@ def test_listserv_search_form_uses_rich_list_id_input_and_stored_suggestions(
             parse_date_set(["= 2026-10-05"]),
             (),
         )
-        messages.append((message_url, subject))
+
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
 
     response = client.get("/listserv", params={"list_id": "SA%", "limit": 150})
     assert response.status_code == 200
@@ -394,13 +401,24 @@ def test_listserv_search_form_uses_rich_list_id_input_and_stored_suggestions(
     suggestions = soup.find("datalist", id="listserv-list-id-suggestions")
     assert suggestions is not None
     suggested_ids = {option.get("value") for option in suggestions.find_all("option")}
-    assert {"SA1", "SA2", "CT1"} <= suggested_ids
+    assert {"SA1", "SA2", "CT1", "3GPP_TSG_RAN_WG1", "LEGACY_NULL_LIST"} <= suggested_ids
+    assert all("ListservList" not in str(value) for value in suggested_ids)
 
     rendered_subjects = {
         heading.get_text(strip=True)
         for heading in soup.select("ul.listserv-results h3")
     }
     assert rendered_subjects == {"SA1 handover", "SA2 handover"}
+
+    selected = client.get(
+        "/listserv", params={"list_id": "3GPP_TSG_RAN_WG1", "limit": 150}
+    )
+    assert selected.status_code == 200
+    selected_soup = BeautifulSoup(selected.text, "html.parser")
+    selected_input = selected_soup.find(
+        "input", attrs={"name": "list_id", "value": "3GPP_TSG_RAN_WG1"}
+    )
+    assert selected_input is not None
 
 
 def test_listserv_search_form_preserves_rich_tokens_and_ignores_blank(

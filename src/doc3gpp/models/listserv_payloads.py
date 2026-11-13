@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from typing import Any
 from urllib.parse import unquote
 
 from doc3gpp.models.listserv import (
     ListservDetailMetadata,
+    ListservList,
     ListservMessage,
     ListservRecord,
     ListservSearchRecord,
@@ -232,12 +235,29 @@ def listserv_search_payload(result: ListservSearchResult) -> dict[str, object]:
     }
 
 
+def listserv_lists_payload(lists: Sequence[ListservList]) -> dict[str, Any]:
+    """Serialize ordered LISTSERV catalog entries for HTTP and MCP responses."""
+    records = [
+        {
+            "list_id": item.list_id,
+            "tsg": item.tsg,
+            "description": item.description,
+        }
+        for item in lists
+    ]
+    return {
+        "list_ids": [item.list_id for item in lists],
+        "lists": records,
+    }
+
+
 __all__ = [
     "PREVIEW_MAX_CHARS",
     "effective_record_tdocs",
     "format_indexable_date",
     "indexable_fields",
     "indexable_text",
+    "listserv_lists_payload",
     "listserv_record_payload",
     "listserv_search_payload",
     "record_to_search_record",

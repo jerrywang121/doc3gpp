@@ -262,6 +262,8 @@ class ListservSyncService:
             )
             return ListservBatchResult(processed=0, skipped=0, failures={})
 
+        catalog_registered = self._repository.has_list(normalized_list_id)
+
         workers = self._max_workers or min(6, (os.cpu_count() or 4) + 4)
         source_ctx = (
             nullcontext(self._source)
@@ -272,6 +274,31 @@ class ListservSyncService:
         processed = 0
         skipped = 0
         failures: dict[str, str] = {}
+        buffered_empty_pages: list[tuple[ArchivePage, tuple[str, ...]]] = []
+
+        def _commit_page(
+            page: ArchivePage,
+            messages: Sequence[ListservMessage],
+            next_urls: Sequence[str],
+        ) -> bool:
+            nonlocal processed
+            try:
+                self._repository.commit_page(
+                    page, messages, requested_dates, next_urls
+                )
+            except Exception as exc:  # noqa: BLE001
+                reason = _safe_failure_description(exc)
+                failures[page.url] = reason
+                logger.warning(
+                    "LISTSERV commit failed for %s: %s", page.url, reason
+                )
+                _emit_progress(on_progress, f"Failed {page.url}: {reason}")
+                return False
+
+            processed += 1
+            self._update_indexes([msg.url for msg in messages], failures)
+            _emit_progress(on_progress, f"Processed {page.url}")
+            return True
 
         with source_ctx as active_source:
             fetched_index = active_source.fetch(index_url)
@@ -379,41 +406,44 @@ class ListservSyncService:
                             for msg in messages_by_url.values()
                             if date_matches(requested_dates, msg.date.date())
                         ]
-                        try:
-                            self._repository.commit_page(
-                                page,
-                                matching_messages,
-                                requested_dates,
-                                parsed_next_urls,
+                        if not catalog_registered and not matching_messages:
+                            catalog_registered = self._repository.has_list(
+                                normalized_list_id
                             )
-                        except Exception as exc:  # noqa: BLE001
-                            reason = _safe_failure_description(exc)
-                            failures[page.url] = reason
-                            logger.warning(
-                                "LISTSERV commit failed for %s: %s",
-                                page.url,
-                                reason,
-                            )
-                            if not is_cancelled():
-                                for next_url in persisted_next:
-                                    if next_url not in seen_urls:
-                                        seen_urls.add(next_url)
-                                        pending.append(
-                                            ArchivePage(
-                                                list_id=normalized_list_id,
-                                                url=next_url,
-                                                period=page.period,
-                                            )
-                                        )
-                            _emit_progress(
-                                on_progress, f"Failed {page.url}: {reason}"
-                            )
-                            continue
 
-                        processed += 1
-                        self._update_indexes(
-                            [msg.url for msg in matching_messages], failures
-                        )
+                        if not catalog_registered and not matching_messages:
+                            buffered_empty_pages.append(
+                                (page, (*persisted_next, *parsed_next_urls))
+                            )
+                        else:
+                            if not _commit_page(
+                                page, matching_messages, parsed_next_urls
+                            ):
+                                if not is_cancelled():
+                                    for next_url in persisted_next:
+                                        if next_url not in seen_urls:
+                                            seen_urls.add(next_url)
+                                            pending.append(
+                                                ArchivePage(
+                                                    list_id=normalized_list_id,
+                                                    url=next_url,
+                                                    period=page.period,
+                                                )
+                                            )
+                                continue
+
+                            if matching_messages:
+                                catalog_registered = True
+                            if catalog_registered and buffered_empty_pages:
+                                pages_to_flush, buffered_empty_pages = (
+                                    buffered_empty_pages,
+                                    [],
+                                )
+                                for buffered_page, buffered_next_urls in pages_to_flush:
+                                    _commit_page(
+                                        buffered_page, (), buffered_next_urls
+                                    )
+
                         if not is_cancelled():
                             for next_url in (*persisted_next, *parsed_next_urls):
                                 if next_url not in seen_urls:
@@ -425,7 +455,6 @@ class ListservSyncService:
                                             period=page.period,
                                         )
                                     )
-                        _emit_progress(on_progress, f"Processed {page.url}")
 
         if cancel_latched:
             _emit_progress(

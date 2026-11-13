@@ -160,16 +160,28 @@ def test_cli_and_job_share_listserv_failure_classifier(reason, expected):
 
 
 def test_list_prints_ids(monkeypatch, sqlite_env, disable_auto_sync):
+    from types import SimpleNamespace
+
     from doc3gpp.services import factory
 
     class S:
         def list_ids(self):
             return ["A", "B"]
 
+        def list_lists(self):
+            return [
+                SimpleNamespace(list_id="ALPHA", tsg="R1", description="Radio access"),
+                SimpleNamespace(list_id="BETA", tsg=None, description=None),
+            ]
+
     monkeypatch.setattr(factory, "build_listserv_service", lambda *a, **k: S())
     result = runner.invoke(app, ["listserv", "list"])
     assert result.exit_code == 0
-    assert result.output.split() == ["A", "B"]
+    assert result.output.splitlines() == [
+        "list_id\ttsg\tdescription",
+        "ALPHA\tR1\tRadio access",
+        "BETA\t-\t-",
+    ]
 
 
 def test_search_passes_filters_and_emits_shared_payload(monkeypatch, sqlite_env, disable_auto_sync):

@@ -102,7 +102,7 @@ def test_tsg_payload_shape() -> None:
     short = next(row for row in payload if row["field"] == "short_name")
     assert short["nullable"] is False
     assert short["values"] == (
-        "RP,R1,R2,R3,R4,R5,RT,SP,S1,S2,S3,S4,S5,S6,CP,C1,C3,C4,C6"
+        "RP,R1,R2,R3,R4,R5,R6,RT,SP,S1,S2,S3,S4,S5,S6,CP,C1,C3,C4,C6"
     )
 
 
@@ -221,6 +221,7 @@ def test_registry_matches_orm_columns() -> None:
     assert hasattr(orm_models, "TDocZipInventoryOrm"), "ZIP inventory ORM is missing"
     assert hasattr(orm_models, "SpecDocZipInventoryORM"), "Spec ZIP inventory ORM is missing"
     assert hasattr(orm_models, "SpecDocPresentationORM"), "Spec presentation ORM is missing"
+    assert hasattr(orm_models, "ListservListORM"), "ListservListORM is missing"
     assert hasattr(orm_models, "ListservMessageORM"), "ListservMessageORM is missing"
     assert hasattr(orm_models, "ListservDetailORM"), "ListservDetailORM is missing"
     assert hasattr(orm_models, "ListservArchivePageORM"), "ListservArchivePageORM is missing"
@@ -250,6 +251,7 @@ def test_registry_matches_orm_columns() -> None:
         "testcases": TestCaseORM,
         "testcase_status": TestCaseStatusORM,
         "testcase_sources": TestCaseSourceORM,
+        "listserv_list": orm_models.ListservListORM,
         "listserv_messages": orm_models.ListservMessageORM,
         "listserv_details": orm_models.ListservDetailORM,
         "listserv_archive_pages": orm_models.ListservArchivePageORM,
@@ -275,7 +277,7 @@ def test_categoricals_match_canonical_constants() -> None:
     from doc3gpp.cli import VALID_TESTCASE_GROUPS
     from doc3gpp.models.schema_info import RESOURCE_SCHEMAS
     from doc3gpp.models.tdoc_file import TDocFileTypes
-    from doc3gpp.services.tsg_service import _DEFAULT_TSGS
+    from doc3gpp.models.tsg_defaults import default_tsgs
     from doc3gpp.storage.repositories.testcase_sql import _PATH_RANK
 
     by_table = {}
@@ -283,7 +285,7 @@ def test_categoricals_match_canonical_constants() -> None:
         for table in tables:
             for field in table.fields:
                 by_table[(table.table, field.name)] = field
-    assert by_table[("tsgs", "short_name")].values == tuple(t.short_name for t in _DEFAULT_TSGS)
+    assert by_table[("tsgs", "short_name")].values == tuple(t.short_name for t in default_tsgs())
     assert by_table[("testcases", "group")].values == tuple(VALID_TESTCASE_GROUPS)
     assert by_table[("testcase_status", "path")].values == tuple(_PATH_RANK)
     # Brief verbatim was `...values == tuple(sorted(TDocFileTypes))`, but

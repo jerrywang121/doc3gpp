@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from doc3gpp.models.listserv import ListservRecord, normalize_tdoc_ids
+from doc3gpp.models.listserv import ListservList, ListservRecord, normalize_tdoc_ids
 from doc3gpp.repository.listserv import ListservRepository
 
 
@@ -17,13 +17,17 @@ class ListservMessageNotFoundError(LookupError):
 
 
 class ListservService:
-    """SQL-only read service for stored LISTSERV list IDs and message details."""
+    """SQL-only read service for stored LISTSERV catalog entries and messages."""
 
     def __init__(self, repository: ListservRepository) -> None:
         self._repository = repository
 
+    def list_lists(self) -> list[ListservList]:
+        """Return catalog entries ordered by list ID without network access."""
+        return self._repository.list_lists()
+
     def list_ids(self) -> list[str]:
-        """Return distinct stored LISTSERV list IDs in ascending order without network access."""
+        """Return catalog list IDs in ascending order without network access."""
         return self._repository.list_ids()
 
     def show(self, url: str) -> ListservRecord:

@@ -3,12 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from doc3gpp.models.tsg import Tsg
 from doc3gpp.services import meetings_service as meetings_service_module
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.models import MeetingORM, TsgORM
+from doc3gpp.storage.db.models import MeetingORM
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
@@ -72,16 +71,6 @@ def test_sync_populates_tsg_fk_and_list_filters_by_it(tmp_path, monkeypatch) -> 
 
     create_schema()
 
-    with get_engine().begin() as conn:
-        conn.execute(
-            TsgORM.__table__.insert().values(
-                tsg_name="RAN WG5",
-                short_name="R5",
-                description="Mobile terminal conformance testing",
-                url=None,
-            )
-        )
-
     service = MeetingService(SQLAlchemyMeetingRepository())
     outcome = service.sync("https://example.invalid", tsg="r5")
     assert outcome.status == "synced"
@@ -117,15 +106,9 @@ def test_meeting_sync_skips_within_interval(tmp_path, monkeypatch) -> None:
 
     create_schema()
     tsg_repo = SQLAlchemyTsgRepository()
-    tsg_repo.upsert_many([
-        Tsg(
-            tsg_name="RAN WG5",
-            short_name="R5",
-            description="x",
-            url=None,
-            meeting_last_sync=datetime.now(timezone.utc) - timedelta(hours=1),
-        ),
-    ])
+    assert tsg_repo.update_meeting_last_sync(
+        "R5", datetime.now(timezone.utc) - timedelta(hours=1)
+    )
 
     service = MeetingService(
         SQLAlchemyMeetingRepository(),
@@ -157,15 +140,9 @@ def test_meeting_sync_force_bypasses_interval(tmp_path, monkeypatch) -> None:
 
     create_schema()
     tsg_repo = SQLAlchemyTsgRepository()
-    tsg_repo.upsert_many([
-        Tsg(
-            tsg_name="RAN WG5",
-            short_name="R5",
-            description="x",
-            url=None,
-            meeting_last_sync=datetime.now(timezone.utc) - timedelta(hours=1),
-        ),
-    ])
+    assert tsg_repo.update_meeting_last_sync(
+        "R5", datetime.now(timezone.utc) - timedelta(hours=1)
+    )
 
     service = MeetingService(
         SQLAlchemyMeetingRepository(),
@@ -190,14 +167,6 @@ def test_list_distinct_tsgs_excludes_null_and_returns_sorted_unique_values(
     create_schema()
 
     with get_engine().begin() as conn:
-        conn.execute(
-            TsgORM.__table__.insert().values(
-                [
-                    {"tsg_name": "RAN WG5", "short_name": "R5", "description": "x", "url": None},
-                    {"tsg_name": "SA WG2", "short_name": "S2", "description": "x", "url": None},
-                ]
-            )
-        )
         conn.execute(
             MeetingORM.__table__.insert().values(
                 [

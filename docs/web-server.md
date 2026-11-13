@@ -226,7 +226,7 @@ SDK payload serializers; they do not sync, parse, or fetch ETSI content.
 
 | Method and path | Inputs / response |
 | --- | --- |
-| `GET /api/listserv/lists` | `{"list_ids": [...]}`; distinct IDs found in stored message rows, not a static catalogue |
+| `GET /api/listserv/lists` | `{"list_ids":[...],"lists":[{"list_id":"...","tsg":null,"description":null}]}`; ordered catalog entries, including lists without messages |
 | `GET /api/listserv/search` | Query: repeatable `date`; `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit` (default 20, 0–150), `offset` (default 0); response is a bare array of search payloads |
 | `GET /api/listserv/show?url=...` | Required exact stored message detail URL; response is the full stored-record payload |
 | `GET /api/listserv/index/status` | Independent FTS/vector `IndexStatus` JSON; no upstream request |
@@ -240,6 +240,13 @@ parse require one exact list ID. Accepted mutations return HTTP 202 with a
 queued job envelope. Their job kinds are `listserv_sync`, `listserv_parse`, and
 `listserv_index`. The general
 [monitor/cancel API](#monitor-and-cancel) applies.
+
+The list response reads the main-database catalog and uses the same serializer
+as MCP. `lists` is ordered by `list_id`; each record has `list_id`, nullable
+`tsg`, and nullable `description` fields, with nulls represented as JSON `null`.
+The parallel `list_ids` array is retained for existing clients and for the
+`/listserv` selector. The catalog contains seeded references and discovered or
+legacy-backfilled IDs, even when no messages are stored.
 
 Sync/parse job results include `list_id`, `processed`, `skipped`, `failed`,
 `index_failed`, `failures`, `index_failures`, and `message`. Source failures
@@ -284,7 +291,8 @@ browser UI is at `/listserv`; empty or whitespace-only optional search fields
 are ignored in both HTTP search routes. Its list-ID search field accepts the
 same rich filter syntax as the search API (`%`/`_` LIKE patterns, leading `!`
 negation, `null`, and `not-null`). Stored list IDs appear as suggestions, and
-an empty field searches all lists. Sync and parse forms still require one exact
+an empty field searches all lists. Suggestions use the compatibility ID array,
+not the catalog record objects. Sync and parse forms still require one exact
 list ID.
 `/listserv/show` takes the exact `url` query value. Its forms reuse these
 routes/jobs, and opening either page never syncs or parses. HTTP server

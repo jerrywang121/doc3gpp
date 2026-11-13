@@ -18,6 +18,7 @@ from doc3gpp.models.index import IndexRequest
 from doc3gpp.models.jobs import Job, JobKind, JSONValue
 from doc3gpp.models.listserv import ListservFilters, parse_date_set
 from doc3gpp.models.listserv_payloads import (
+    listserv_lists_payload,
     listserv_record_payload,
     listserv_search_payload,
 )
@@ -149,8 +150,8 @@ class _IndexBody(BaseModel):
 @router.get("/lists")
 def list_listserv_ids(
     service: ListservService = Depends(get_listserv_service),
-) -> dict[str, list[str]]:
-    return {"list_ids": service.list_ids()}
+) -> dict[str, Any]:
+    return listserv_lists_payload(service.list_lists())
 
 
 @router.get("/search")

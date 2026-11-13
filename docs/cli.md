@@ -88,7 +88,7 @@ Behavior:
 - Calls `create_schema(scope)` — only the selected scope's schema is
   created (`tsgs` is seeded when main is in scope).
 - Creates currently defined ORM tables if they do not exist.
-- Seeds the `tsgs` table with the canonical 3GPP TSG list (19 rows). Existing
+- Seeds the `tsgs` table with the canonical 3GPP TSG list (20 rows). Existing
   rows are refreshed in place, so re-running this command is safe.
 - After upgrading an existing database to a release that adds TDoc ZIP
   inventory, run `doc3gpp db init --scope main` before TDoc reads or parses.
@@ -309,7 +309,7 @@ Behavior:
   `nullable`, `description`, `values`.
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
-- `values` is a comma-joined string of the fixed set (e.g. the 19
+- `values` is a comma-joined string of the fixed set (e.g. the 20
   TSG short names on `meetings.tsg`); `"-"` when the field is
   free-form.
 
@@ -2295,8 +2295,9 @@ Purpose:
 Behavior:
 
 - Creates the schema (idempotent).
-- Upserts the 19 canonical rows; existing rows are updated in place rather
-  than duplicated. URLs are composed from the project URL pattern.
+- Upserts the 20 canonical rows; existing rows are updated in place rather
+  than duplicated. URLs are composed from the project URL pattern, except
+  historical RAN WG6 (`R6`), which has no URL.
 
 Examples:
 
@@ -2328,8 +2329,8 @@ Behavior:
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
 - `values` is a comma-joined string of the fixed set (`short_name`
-  carries all 19 canonical codes
-  `RP,R1,R2,R3,R4,R5,RT,SP,S1,S2,S3,S4,S5,S6,CP,C1,C3,C4,C6`);
+  carries all 20 canonical codes
+  `RP,R1,R2,R3,R4,R5,R6,RT,SP,S1,S2,S3,S4,S5,S6,CP,C1,C3,C4,C6`);
   `"-"` when the field is free-form.
 
 Examples:
@@ -2447,7 +2448,7 @@ Behavior:
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
 - `values` is a comma-joined string of the fixed set (`tsg_short`
-  carries the 19 TSG short names); `"-"` when the field is
+  carries the 20 TSG short names); `"-"` when the field is
   free-form (e.g. `release`, scraped verbatim).
 
 Examples:
@@ -2705,7 +2706,7 @@ Behavior:
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
 - `values` is a comma-joined string of the fixed set (`specs.type`
-  `TS,TR`; `tsg` carries the 19 TSG short names); `"-"` when the
+  `TS,TR`; `tsg` carries the 20 TSG short names); `"-"` when the
   field is free-form (e.g. `status`, scraped verbatim). The
   transient fields `SpecVersion.wki_id` and `SpecVersion.zip_files` are not
   persisted and have no descriptor rows.
@@ -3389,10 +3390,13 @@ doc3gpp server uninstall systemd
 ## LISTSERV commands
 
 The `listserv` group works with **public** ETSI LISTSERV archives on
-`https://list.etsi.org`. It accepts an exact public list ID, not a local
-allowlist. `RAN-WG1` and the TDoc IDs below are examples only. `listserv list`
-shows distinct IDs already represented by stored messages; it is not an upstream
-catalogue and does not discover lists.
+`https://list.etsi.org`. Sync and parse accept an exact public list ID, not a
+local allowlist. `RAN-WG1` and the TDoc IDs below are examples only.
+`listserv list` reads the main-database catalog rather than upstream pages or
+only message rows. It prints tab-separated `list_id`, `tsg`, and `description`
+columns in ID order; null metadata is shown as `-`. The catalog includes
+pre-seeded reference entries and lists discovered by sync, including entries
+that do not yet have stored messages.
 
 ```bash
 # Sync message listings. Without --date, cover the rolling preceding calendar

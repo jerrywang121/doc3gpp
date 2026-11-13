@@ -199,15 +199,19 @@ The shared registry adds these LISTSERV tools to both stdio and HTTP MCP:
 | --- | --- |
 | `listserv_sync` | Required exact `list_id`; optional repeatable `date` string array and `force`; enqueues sync |
 | `listserv_parse` | Required exact `list_id`; optional repeatable `date` string array and `force`; parses stored messages |
-| `listserv_list` | No arguments; returns `{"list_ids":[...]}` for IDs in stored rows |
+| `listserv_list` | No arguments; returns the shared catalog JSON `{"list_ids":[...],"lists":[{"list_id":"...","tsg":null,"description":null}]}` |
 | `listserv_search` | Optional `date`, `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit`, `offset`; returns search payload array |
 | `listserv_show` | Required exact stored detail `url`; returns full stored-record payload |
 | `listserv_index_status` | No arguments; returns FTS/vector status |
 | `listserv_index_rebuild` | `rebuild`, `rebuild_embeddings`, `rebuild_all`, `batch`, `resume`, `stale_only`; enqueues index maintenance |
 
 The `RAN-WG1` example used in CLI/API documentation is not an ID whitelist.
-Date filters use the shared displayed-date comparison grammar. Read and status
-tools use SQL-backed services and do not fetch or parse upstream content.
+`listserv_list` returns the same ordered catalog payload as HTTP: `list_ids`
+remains for compatibility, while each `lists` item contains `list_id`, `tsg`,
+and `description`; nullable metadata is JSON `null`. The catalog includes seeded
+and discovered entries without requiring stored messages. Date filters use the
+shared displayed-date comparison grammar. Read and status tools use SQL-backed
+services and do not fetch or parse upstream content.
 Search returns the same serialized fields as HTTP, including `url`, `tdocs`,
 `content_truncated`, and the separate `preview_truncated`; show returns the
 complete stored body only. MCP wraps each returned JSON string in its tool

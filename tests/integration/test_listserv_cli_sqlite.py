@@ -70,9 +70,76 @@ def stored(sqlite_env, disable_auto_sync, monkeypatch):
 
 
 def test_list_returns_distinct_ids(stored):
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
+
     result = runner.invoke(app, ["listserv", "list"])
     assert result.exit_code == 0
-    assert result.output.split() == ["3GPP_TSG_RAN_WG1"]
+    lines = result.output.splitlines()
+    assert lines[0].split("\t") == ["list_id", "tsg", "description"]
+    rows = [line.split("\t") for line in lines[1:]]
+    ids = [row[0] for row in rows]
+    assert ids == sorted(ids)
+    assert {"3GPP_TSG_RAN_WG1", "LEGACY_NULL_LIST"} <= set(ids)
+    assert [
+        "3GPP_TSG_CT_WG3_108E_MAIN",
+        "C3",
+        "3GPP_TSG_CT_WG3_108e_main Closed 02/12/2020, #done by JMS by request Anna ticket n°2020-105066",
+    ] in rows
+    assert ["LEGACY_NULL_LIST", "-", "-"] in rows
+
+
+
+def test_list_lists_and_ids_include_seeded_catalog_without_messages_and_preserve_null_metadata(
+    sqlite_env, disable_auto_sync
+):
+    from dataclasses import FrozenInstanceError
+
+    import pytest
+
+    import doc3gpp.models.listserv as listserv_models
+    from doc3gpp.models.listserv import ListservFilters
+    from doc3gpp.services.listserv_service import ListservService
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+    from doc3gpp.storage.repositories.listserv_sql import SQLAlchemyListservRepository
+
+    create_schema("main")
+    repository = SQLAlchemyListservRepository()
+    service = ListservService(repository=repository)
+
+    assert callable(getattr(repository, "list_lists", None))
+    assert callable(getattr(service, "list_lists", None))
+    assert hasattr(listserv_models, "ListservList")
+    list_type = listserv_models.ListservList
+
+    seeded = repository.list_lists()
+    seeded_ids = [record.list_id for record in seeded]
+    assert len(seeded) == 97
+    assert seeded_ids == sorted(seeded_ids)
+    assert service.list_lists() == seeded
+    assert service.list_ids() == seeded_ids
+    assert repository.select(ListservFilters()) == []
+
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
+
+    records = service.list_lists()
+    legacy = next(record for record in records if record.list_id == "LEGACY_NULL_LIST")
+    assert isinstance(legacy, list_type)
+    assert legacy == list_type(
+        list_id="LEGACY_NULL_LIST", tsg=None, description=None
+    )
+    assert service.list_ids() == [record.list_id for record in records]
+    assert service.list_ids() == sorted(service.list_ids())
+    with pytest.raises(FrozenInstanceError):
+        legacy.tsg = "R1"
 
 
 def test_filter_only_search_json_preview_and_nullable(stored):

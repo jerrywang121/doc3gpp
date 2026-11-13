@@ -138,8 +138,22 @@ def test_mcp_search_matches_http_with_repeated_dates_and_both_truncation_flags(s
 
 
 def test_mcp_list_and_index_status_match_http_and_read_without_network(surfaces):
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
     http, server, _state = surfaces
-    assert _call_json(server, "listserv_list", {}) == http.get("/api/listserv/lists").json()
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
+
+    http_lists = http.get("/api/listserv/lists").json()
+    mcp_lists = _call_json(server, "listserv_list", {})
+    assert mcp_lists == http_lists
+    assert isinstance(mcp_lists, dict)
+    assert set(mcp_lists) == {"list_ids", "lists"}
+    assert {"list_id": "LEGACY_NULL_LIST", "tsg": None, "description": None} in mcp_lists["lists"]
+    assert {"list_id": "3GPP_TSG_CT", "tsg": "CP", "description": "3GPP_TSG_CT - Core Network and Terminals"} in mcp_lists["lists"]
+
     assert _call_json(server, "listserv_index_status", {}) == http.get(
         "/api/listserv/index/status"
     ).json()

@@ -436,14 +436,46 @@ day-only values is approximate.
 
 Coverage belongs to the actual archive-page URL, not its week/month label:
 ETSI may split one week across multiple pages, and a message date can differ
-from the page label. Successful empty pages are covered; unrecognized or failed
-pages remain retryable. Historical pages are skipped only when recorded
-successful coverage includes the requested date predicate. The newest upstream
-period (week, or a month-only latest label) is revisited each sync; `--force`
-revisits every selected page. Page
-messages, pagination links, and coverage commit atomically, so a failed page
-does not imply coverage. A conservative first filtered scan can fetch more
-historical pages than the displayed period suggests.
+from the page label. For a cataloged list, successful empty pages are covered;
+unrecognized or failed pages remain retryable. Historical pages are skipped
+only when recorded successful coverage includes the requested date predicate.
+The newest upstream period (week, or a month-only latest label) is revisited
+each sync; `--force` revisits every selected page. Page messages, pagination
+links, and coverage commit atomically, so a failed page does not imply coverage.
+A conservative first filtered scan can fetch more historical pages than the
+displayed period suggests.
+
+### Catalog discovery and legacy databases
+
+The main database has a LISTSERV catalog populated with reference entries during
+main-schema initialization. Initialization is repeatable and inserts missing
+rows without overwriting locally maintained TSG or description metadata. A
+previously unknown ID is registered only when a successfully parsed archive page
+contains at least one message matching the requested date filters. For that
+unknown list, successful zero-match pages and their pagination links are held in
+memory while sync follows the links. Once a matching page registers the list,
+the buffered pages are committed; each page's messages, coverage, and next links
+remain atomic. If sync ends or is cancelled before a matching page commits, the
+buffers are discarded and no list or coverage is persisted, so those pages can
+be fetched again. A recognized TSG code is used only when it exists in the
+TSG table; otherwise discovered TSG metadata and all new descriptions are null.
+Existing catalog metadata is never recomputed during discovery.
+
+Main-schema initialization also performs a targeted upgrade for legacy SQLite
+databases: IDs found in old message or archive-page rows are backfilled into the
+catalog with null metadata, and the required foreign keys are established while
+preserving supported data and indexes. This is LISTSERV-specific compatibility
+logic, not a general migration framework. Unsupported legacy table shapes or
+non-SQLite legacy schemas without the required constraints fail explicitly
+rather than being reported as upgraded; `create_all` alone cannot add foreign
+keys to existing SQLite tables.
+
+SQLite must restore foreign-key enforcement after committing the upgrade. If
+that or another post-commit connection cleanup fails, initialization raises
+`ListservCatalogUpgradeCommittedError`: the catalog upgrade is already durable,
+and the affected connection is discarded. The rest of schema initialization may
+not have run; retry initialization after resolving the cleanup failure. Failures
+before commit roll back the upgrade instead.
 
 The SDK uses the same service contracts without the web job queue:
 
@@ -470,8 +502,10 @@ try:
 finally:
     parse_service.close()
 
-messages = build_listserv_service()
-record = messages.show(
+listserv_service = build_listserv_service()
+catalog = listserv_service.list_lists()  # ordered list_id, TSG, and description records
+list_ids = listserv_service.list_ids()  # compatibility IDs from the same catalog
+record = listserv_service.show(
     "https://list.etsi.org/scripts/wa.exe?A2=RAN-WG1;2026-10-15;EXAMPLE"
 )
 search_service = build_listserv_search_service()
@@ -524,9 +558,12 @@ forced reparse leaves its prior good detail intact. A parsed-empty message has
 ### Stored reads, search, and indexes
 
 `listserv list`, search, show, and index status/rebuild read stored SQL and do
-not fetch or parse upstream pages. List returns distinct IDs represented by
-stored messages, not an archive catalogue. Show requires the exact detail URL
-and returns the full **stored** body only; it cannot recover truncated text.
+not fetch or parse upstream pages. `listserv list` reads the catalog, including
+pre-seeded entries and discovered or legacy-backfilled IDs that have no stored
+messages. The service returns immutable `ListservList` records with `list_id`,
+`tsg`, and `description`, ordered by ID; `list_ids()` remains a compatibility
+view of those catalog IDs. Show requires the exact detail URL and returns the
+full **stored** body only; it cannot recover truncated text.
 
 Search modes match the shared facades: `text` uses FTS5, `semantic` uses vector
 search, both use hybrid RRF, and neither uses source-SQL filters only. The

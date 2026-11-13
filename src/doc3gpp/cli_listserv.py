@@ -113,13 +113,19 @@ def listserv_parse(
 
 @listserv_app.command("list")
 def listserv_list() -> None:
-    """List stored LISTSERV list IDs."""
+    """List LISTSERV catalog entries and their TSG and description."""
     from doc3gpp.services.factory import build_listserv_service
     from doc3gpp.storage.db.migrate import create_schema
 
     create_schema("main")
-    for list_id in build_listserv_service().list_ids():
-        typer.echo(list_id)
+    typer.echo("list_id\ttsg\tdescription")
+    for item in build_listserv_service().list_lists():
+        typer.echo(
+            "\t".join(
+                value if value is not None else "-"
+                for value in (item.list_id, item.tsg, item.description)
+            )
+        )
 
 
 @listserv_app.command("search")

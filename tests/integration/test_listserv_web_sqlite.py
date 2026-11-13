@@ -141,10 +141,51 @@ def test_http_show_not_found_is_404(client):
 
 
 def test_http_lists_matches_sdk(client):
+    from doc3gpp.storage.db.models import ListservListORM
+    from doc3gpp.storage.db.session import get_session_factory
+
+    with get_session_factory()() as session:
+        session.add(ListservListORM(list_id="LEGACY_NULL_LIST"))
+        session.commit()
+
     response = client.get("/api/listserv/lists")
     assert response.status_code == 200
-    assert response.json() == {"list_ids": factory.build_listserv_service().list_ids()}
-    assert response.json()["list_ids"] == [LIST_ID]
+    payload = response.json()
+    assert set(payload) == {"list_ids", "lists"}
+
+    records = factory.build_listserv_service().list_lists()
+    expected_lists = [
+        {
+            "list_id": record.list_id,
+            "tsg": record.tsg,
+            "description": record.description,
+        }
+        for record in records
+    ]
+    assert payload == {
+        "list_ids": [record.list_id for record in records],
+        "lists": expected_lists,
+    }
+    assert payload["list_ids"] == [entry["list_id"] for entry in payload["lists"]]
+    assert payload["list_ids"] == sorted(payload["list_ids"])
+    assert LIST_ID in payload["list_ids"]
+
+    lists = {entry["list_id"]: entry for entry in payload["lists"]}
+    assert lists["3GPP_TSG_CT"] == {
+        "list_id": "3GPP_TSG_CT",
+        "tsg": "CP",
+        "description": "3GPP_TSG_CT - Core Network and Terminals",
+    }
+    assert lists["3GPP_TSG_RAN_WG6"] == {
+        "list_id": "3GPP_TSG_RAN_WG6",
+        "tsg": "R6",
+        "description": "3GPP_TSG_RAN_WG6 Close 14/08/2020 JMS ticket 2020-103474",
+    }
+    assert lists["LEGACY_NULL_LIST"] == {
+        "list_id": "LEGACY_NULL_LIST",
+        "tsg": None,
+        "description": None,
+    }
 
 
 def test_http_search_matches_sdk_with_repeated_dates_and_paging(client):

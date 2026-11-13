@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from unittest.mock import patch
@@ -26,6 +27,8 @@ from doc3gpp.services.factory import build_listserv_sync_service
 from doc3gpp.services.listserv_sync import ListservSyncService
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.db.models import ListservListORM
+from doc3gpp.storage.db.session import get_session_factory
 from doc3gpp.storage.repositories.listserv_sql import SQLAlchemyListservRepository
 
 
@@ -58,6 +61,14 @@ def _listing_html(
         "<html><head><title>Archive Listing</title></head><body>"
         f"{nav}<table>{''.join(tr_parts)}</table></body></html>"
     )
+
+
+def _listserv_catalog_metadata(list_id: str) -> tuple[str | None, str | None] | None:
+    with get_session_factory()() as session:
+        row = session.get(ListservListORM, list_id)
+        if row is None:
+            return None
+        return row.tsg, row.description
 
 
 @dataclass
@@ -1269,3 +1280,494 @@ def test_sync_duplicate_final_inside_local_date_is_persisted_and_indexed_once(
     )
     assert repository.get_next_urls(page) == (next_url,)
     assert next_url in source.requests
+
+
+def test_unknown_list_buffers_empty_page_until_later_matching_page(
+    repository: ListservRepository,
+) -> None:
+    list_id = "3gpp_tsg_ran_wg2_buffered"
+    normalized_list_id = "3GPP_TSG_RAN_WG2_BUFFERED"
+    index_url = archive_index_url(list_id)
+    empty_page_url = (
+        "https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L=3GPP_TSG_RAN_WG2_BUFFERED"
+    )
+    matching_page_url = f"{empty_page_url}&S=next"
+    message_url = (
+        "https://list.etsi.org/scripts/wa.exe?A2=ind2604B&L=3GPP_TSG_RAN_WG2_BUFFERED&P=1"
+    )
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(empty_page_url, "April 2026, Week 1")]),
+            empty_page_url: _listing_html(
+                [], next_links=[(matching_page_url, "Next Page")], empty_notice="No messages"
+            ),
+            matching_page_url: _listing_html(
+                [(message_url, "Matching message", "Alice", "2026-04-02 10:00:00 +0000")]
+            ),
+        }
+    )
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    result = service.sync(list_id, dates=["= 2026-04-02"])
+
+    expected_coverage = DateSet(
+        (DateInterval(date(2026, 4, 2), date(2026, 4, 2)),)
+    )
+    assert source.requests == [index_url, empty_page_url, matching_page_url]
+    assert result.processed == 2
+    assert result.skipped == 0
+    assert result.failures == {}
+    assert repository.has_list(normalized_list_id)
+    assert _listserv_catalog_metadata(normalized_list_id) == ("R2", None)
+    stored = repository.get(message_url)
+    assert stored is not None and stored.message.list_id == normalized_list_id
+    assert repository.get_coverage(ArchivePage(normalized_list_id, empty_page_url, "2026-04-W1")) == expected_coverage
+    assert repository.get_coverage(ArchivePage(normalized_list_id, matching_page_url, "2026-04-W1")) == expected_coverage
+    assert repository.get_next_urls(ArchivePage(normalized_list_id, empty_page_url, "2026-04-W1")) == (matching_page_url,)
+
+
+@pytest.mark.parametrize(
+    ("list_id", "expected_id"),
+    [
+        ("3GPP_TSG_CT_WG99_DISCOVERY_TEST", "3GPP_TSG_CT_WG99_DISCOVERY_TEST"),
+        ("OTHER_LIST_DISCOVERY_TEST", "OTHER_LIST_DISCOVERY_TEST"),
+    ],
+)
+def test_discovered_unknown_or_unrecognized_tsg_is_stored_as_null(
+    repository: ListservRepository, list_id: str, expected_id: str
+) -> None:
+    index_url = archive_index_url(list_id)
+    page_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L={expected_id}"
+    message_url = f"https://list.etsi.org/scripts/wa.exe?A2=ind2604A&L={expected_id}&P=1"
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(page_url, "April 2026, Week 1")]),
+            page_url: _listing_html(
+                [(message_url, "Matching message", "Alice", "2026-04-02 10:00:00 +0000")]
+            ),
+        }
+    )
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    result = service.sync(list_id, dates=["= 2026-04-02"])
+
+    assert result.processed == 1
+    assert result.failures == {}
+    assert repository.has_list(expected_id)
+    assert _listserv_catalog_metadata(expected_id) == (None, None)
+    assert repository.get(message_url) is not None
+
+
+def test_discovery_does_not_overwrite_seeded_catalog_metadata(
+    repository: ListservRepository,
+) -> None:
+    list_id = "3GPP_TSG_RAN_ADHOC"
+    index_url = archive_index_url(list_id)
+    page_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L=3GPP_TSG_RAN_ADHOC"
+    message_url = "https://list.etsi.org/scripts/wa.exe?A2=ind2604A&L=3GPP_TSG_RAN_ADHOC&P=1"
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(page_url, "April 2026, Week 1")]),
+            page_url: _listing_html(
+                [(message_url, "Matching message", "Alice", "2026-04-02 10:00:00 +0000")]
+            ),
+        }
+    )
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    result = service.sync(list_id, dates=["= 2026-04-02"])
+
+    assert result.processed == 1
+    assert repository.has_list(list_id)
+    assert _listserv_catalog_metadata(list_id) == (
+        "R2",
+        "3gpp_tsg_ran_adhoc: tsg ran ad hoc meetings",
+    )
+
+
+def test_discovery_preserves_locally_edited_catalog_metadata(
+    repository: ListservRepository,
+) -> None:
+    list_id = "3GPP_TSG_RAN_WG2_LOCAL_EDIT"
+    with get_session_factory()() as session:
+        session.add(
+            ListservListORM(
+                list_id=list_id,
+                tsg="SP",
+                description="User-maintained description",
+            )
+        )
+        session.commit()
+
+    index_url = archive_index_url(list_id)
+    page_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L={list_id}"
+    message_url = f"https://list.etsi.org/scripts/wa.exe?A2=ind2604A&L={list_id}&P=1"
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(page_url, "April 2026, Week 1")]),
+            page_url: _listing_html(
+                [(message_url, "Matching message", "Alice", "2026-04-02 10:00:00 +0000")]
+            ),
+        }
+    )
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    result = service.sync(list_id, dates=["= 2026-04-02"])
+
+    assert result.processed == 1
+    assert repository.get(message_url) is not None
+    assert _listserv_catalog_metadata(list_id) == (
+        "SP",
+        "User-maintained description",
+    )
+
+
+
+
+def test_unknown_list_without_matches_discards_pages_and_refetches_them(
+    repository: ListservRepository,
+) -> None:
+    list_id = "UNKNOWN_EMPTY_REFETCH_TEST"
+    index_url = archive_index_url(list_id)
+    first_page_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L={list_id}"
+    second_page_url = f"{first_page_url}&S=next"
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(first_page_url, "April 2026, Week 1")]),
+            first_page_url: _listing_html(
+                [],
+                next_links=[(second_page_url, "Next Page")],
+                empty_notice="No messages",
+            ),
+            second_page_url: _listing_html([], empty_notice="No messages"),
+        }
+    )
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    first = service.sync(list_id, dates=["= 2026-04-02"])
+
+    first_page = ArchivePage(list_id, first_page_url, "2026-04-W1")
+    second_page = ArchivePage(list_id, second_page_url, "2026-04-W1")
+    assert first.processed == 0
+    assert first.failures == {}
+    assert first_page_url in source.requests and second_page_url in source.requests
+    assert not repository.has_list(list_id)
+    assert repository.get_coverage(first_page) == DateSet()
+    assert repository.get_coverage(second_page) == DateSet()
+    assert repository.get_next_urls(first_page) == ()
+
+    source.clear_requests()
+    second = service.sync(list_id, dates=["= 2026-04-02"])
+
+    assert second.processed == 0
+    assert second.failures == {}
+    assert first_page_url in source.requests and second_page_url in source.requests
+
+def test_unknown_list_outside_date_filter_is_not_registered_or_covered(
+    repository: ListservRepository,
+) -> None:
+    list_id = "OUTSIDE_DATE_DISCOVERY_TEST"
+    index_url = archive_index_url(list_id)
+    page_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L={list_id}"
+    message_url = f"https://list.etsi.org/scripts/wa.exe?A2=ind2604A&L={list_id}&P=1"
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(page_url, "April 2026, Week 1")]),
+            page_url: _listing_html(
+                [(message_url, "Outside filter", "Alice", "2026-04-03 10:00:00 +0000")]
+            ),
+        }
+    )
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    result = service.sync(list_id, dates=["= 2026-04-02"])
+
+    page = ArchivePage(list_id, page_url, "2026-04-W1")
+    assert result.processed == 0
+    assert result.failures == {}
+    assert not repository.has_list(list_id)
+    assert _listserv_catalog_metadata(list_id) is None
+    assert repository.get(message_url) is None
+    assert repository.get_coverage(page) == DateSet()
+    assert repository.get_next_urls(page) == ()
+
+
+def test_unknown_list_does_not_persist_buffered_coverage_after_page_failures(
+    repository: ListservRepository,
+) -> None:
+    list_id = "FAILED_BUFFER_DISCOVERY_TEST"
+    index_url = archive_index_url(list_id)
+    page_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L={list_id}"
+    fetch_failure_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604B&L={list_id}"
+    malformed_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604C&L={list_id}"
+    malformed_html = (
+        "<html><body><table>"
+        "<tr><th>Subject</th><th>From</th><th>Date</th></tr>"
+        "<tr><td>Malformed row</td></tr>"
+        "</table></body></html>"
+    )
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(page_url, "April 2026, Week 1")]),
+            page_url: _listing_html(
+                [],
+                next_links=[(fetch_failure_url, "Fetch failure"), (malformed_url, "Malformed")],
+                empty_notice="No messages",
+            ),
+            fetch_failure_url: RuntimeError("temporary fetch failure"),
+            malformed_url: malformed_html,
+        }
+    )
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    result = service.sync(list_id, dates=["= 2026-04-02"])
+
+    page = ArchivePage(list_id, page_url, "2026-04-W1")
+    assert result.processed == 0
+    assert set(result.failures) == {fetch_failure_url, malformed_url}
+    assert not repository.has_list(list_id)
+    assert _listserv_catalog_metadata(list_id) is None
+    assert repository.get_coverage(page) == DateSet()
+    assert repository.get_next_urls(page) == ()
+
+
+def test_cancellation_before_unknown_list_match_discards_buffered_pages(
+    repository: ListservRepository,
+) -> None:
+    list_id = "CANCEL_BUFFER_DISCOVERY_TEST"
+    index_url = archive_index_url(list_id)
+    page_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L={list_id}"
+    matching_page_url = f"{page_url}&S=next"
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(page_url, "April 2026, Week 1")]),
+            page_url: _listing_html(
+                [], next_links=[(matching_page_url, "Next Page")], empty_notice="No messages"
+            ),
+            matching_page_url: _listing_html(
+                [(
+                    f"https://list.etsi.org/scripts/wa.exe?A2=ind2604B&L={list_id}&P=1",
+                    "Would match",
+                    "Alice",
+                    "2026-04-02 10:00:00 +0000",
+                )]
+            ),
+        }
+    )
+    cancelled = False
+
+    def cancel_after_empty_page(url: str) -> None:
+        nonlocal cancelled
+        if url == page_url:
+            cancelled = True
+
+    source.on_fetch = cancel_after_empty_page
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    result = service.sync(
+        list_id, dates=["= 2026-04-02"], cancelled=lambda: cancelled
+    )
+
+    page = ArchivePage(list_id, page_url, "2026-04-W1")
+    assert result.processed == 0
+    assert result.failures == {}
+    assert source.requests == [index_url, page_url]
+    assert not repository.has_list(list_id)
+    assert repository.get_coverage(page) == DateSet()
+    assert repository.get_next_urls(page) == ()
+
+def test_force_sync_commits_empty_coverage_for_seeded_list(
+    repository: ListservRepository,
+) -> None:
+    list_id = "3GPP_TSG_RAN_WG1"
+    index_url = archive_index_url(list_id)
+    page_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2601A&L=3GPP_TSG_RAN_WG1"
+    page = ArchivePage(list_id, page_url, "2026-01-W1")
+    coverage = DateSet((DateInterval(date(2026, 1, 2), date(2026, 1, 2)),))
+    repository.commit_page(page, (), coverage, ())
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(page_url, "January 2026, Week 1")]),
+            page_url: _listing_html([], empty_notice="No messages"),
+        }
+    )
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    result = service.sync(
+        list_id, dates=["= 2026-01-02"], force=True
+    )
+
+    assert result.processed == 1
+    assert result.failures == {}
+    assert page_url in source.requests
+    assert repository.has_list(list_id)
+    assert repository.get_coverage(page) == coverage
+
+
+def test_failed_buffered_page_commit_is_retryable_and_not_counted(
+    repository: ListservRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    list_id = "BUFFER_COMMIT_RETRY_TEST"
+    index_url = archive_index_url(list_id)
+    empty_page_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L={list_id}"
+    matching_page_url = f"{empty_page_url}&S=next"
+    message_url = f"https://list.etsi.org/scripts/wa.exe?A2=ind2604B&L={list_id}&P=1"
+    empty_page = ArchivePage(list_id, empty_page_url, "2026-04-W1")
+    coverage = DateSet((DateInterval(date(2026, 4, 2), date(2026, 4, 2)),))
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(empty_page_url, "April 2026, Week 1")]),
+            empty_page_url: _listing_html(
+                [],
+                next_links=[(matching_page_url, "Next Page")],
+                empty_notice="No messages",
+            ),
+            matching_page_url: _listing_html(
+                [(message_url, "Matching message", "Alice", "2026-04-02 10:00:00 +0000")]
+            ),
+        }
+    )
+    real_commit_page = repository.commit_page
+    fail_buffered_page_once = True
+
+    def fail_first_buffer_commit(page, messages, dates, next_urls) -> None:
+        nonlocal fail_buffered_page_once
+        if page.url == empty_page_url and fail_buffered_page_once:
+            fail_buffered_page_once = False
+            raise RuntimeError("temporary buffered-page commit failure")
+        real_commit_page(page, messages, dates, next_urls)
+
+    monkeypatch.setattr(repository, "commit_page", fail_first_buffer_commit)
+    service = ListservSyncService(
+        repository=repository,
+        source=source,
+        today_fn=lambda: date(2026, 4, 10),
+        max_workers=1,
+    )
+
+    first = service.sync(list_id, dates=["= 2026-04-02"])
+
+    assert first.processed == 1
+    assert set(first.failures) == {empty_page_url}
+    assert repository.has_list(list_id)
+    assert repository.get(message_url) is not None
+    assert repository.get_coverage(empty_page) == DateSet()
+    assert repository.get_next_urls(empty_page) == ()
+
+    source.clear_requests()
+    second = service.sync(list_id, dates=["= 2026-04-02"])
+
+    assert empty_page_url in source.requests
+    assert second.failures == {}
+    assert repository.get_coverage(empty_page) == coverage
+    assert repository.get_next_urls(empty_page) == (matching_page_url,)
+
+
+def test_concurrent_syncs_register_one_unknown_list_without_overwriting_metadata(
+    repository: ListservRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    list_id = "3gpp_tsg_ran_wg2_concurrent_test"
+    normalized_list_id = "3GPP_TSG_RAN_WG2_CONCURRENT_TEST"
+    index_url = archive_index_url(list_id)
+    page_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L={normalized_list_id}"
+    message_urls = [
+        f"https://list.etsi.org/scripts/wa.exe?A2=ind2604A&L={normalized_list_id}&P={n}"
+        for n in (1, 2)
+    ]
+    sources = [
+        RecordingFakeSource(
+            pages={
+                index_url: _index_html([(page_url, "April 2026, Week 1")]),
+                page_url: _listing_html(
+                    [(url, f"Message {n}", "Alice", "2026-04-02 10:00:00 +0000")]
+                ),
+            }
+        )
+        for n, url in enumerate(message_urls, start=1)
+    ]
+    services = [
+        ListservSyncService(
+            repository=repository,
+            source=source,
+            today_fn=lambda: date(2026, 4, 10),
+            max_workers=1,
+        )
+        for source in sources
+    ]
+    original_has_list = repository.has_list
+    catalog_check_barrier = threading.Barrier(2)
+
+    def synchronized_initial_catalog_check(candidate_id: str) -> bool:
+        exists = original_has_list(candidate_id)
+        if candidate_id == normalized_list_id:
+            catalog_check_barrier.wait(timeout=5)
+        return exists
+
+    monkeypatch.setattr(repository, "has_list", synchronized_initial_catalog_check)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                service.sync, list_id, dates=["= 2026-04-02"]
+            )
+            for service in services
+        ]
+        results = [future.result(timeout=15) for future in futures]
+    monkeypatch.setattr(repository, "has_list", original_has_list)
+
+    assert [result.processed for result in results] == [1, 1]
+    assert all(result.failures == {} for result in results)
+    assert repository.has_list(normalized_list_id)
+    with get_session_factory()() as session:
+        catalog_row_count = (
+            session.query(ListservListORM)
+            .filter_by(list_id=normalized_list_id)
+            .count()
+        )
+    assert catalog_row_count == 1
+    assert all(repository.get(url) is not None for url in message_urls)
+    assert _listserv_catalog_metadata(normalized_list_id) == ("R2", None)

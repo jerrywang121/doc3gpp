@@ -2856,24 +2856,11 @@ def test_meeting_show_sync_form_mounts_job_poller(
     """
     from doc3gpp.models.meeting import Meeting
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.db.models import TsgORM
-    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.repositories.meeting_sql import (
         SQLAlchemyMeetingRepository,
     )
 
     create_schema()
-    factory = get_session_factory()
-    with factory() as session:
-        session.add(
-            TsgORM(
-                tsg_name="RAN WG5",
-                short_name="RAN5",
-                description="",
-                url=None,
-            )
-        )
-        session.commit()
     SQLAlchemyMeetingRepository().upsert_many(
         [
             Meeting(
@@ -2881,7 +2868,7 @@ def test_meeting_show_sync_form_mounts_job_poller(
                 name="RAN5#99-e",
                 title="RAN WG5 Meeting #99-e",
                 location="Athens, Greece",
-                tsg="RAN5",
+                tsg="R5",
             ),
         ],
     )
@@ -2911,24 +2898,11 @@ def test_meeting_show_sync_queued_hint_still_renders(
     """
     from doc3gpp.models.meeting import Meeting
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.db.models import TsgORM
-    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.repositories.meeting_sql import (
         SQLAlchemyMeetingRepository,
     )
 
     create_schema()
-    factory = get_session_factory()
-    with factory() as session:
-        session.add(
-            TsgORM(
-                tsg_name="RAN WG5",
-                short_name="RAN5",
-                description="",
-                url=None,
-            )
-        )
-        session.commit()
     SQLAlchemyMeetingRepository().upsert_many(
         [
             Meeting(
@@ -2936,7 +2910,7 @@ def test_meeting_show_sync_queued_hint_still_renders(
                 name="RAN5#99-e",
                 title="RAN WG5 Meeting #99-e",
                 location="Athens, Greece",
-                tsg="RAN5",
+                tsg="R5",
             ),
         ],
     )

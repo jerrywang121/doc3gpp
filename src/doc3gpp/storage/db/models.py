@@ -692,13 +692,30 @@ class SpecDocPresentationORM(SpecDataBase):
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
+class ListservListORM(Base):
+    """Reference catalog entry for a known ETSI LISTSERV mailing list."""
+
+    __tablename__ = "listserv_list"
+
+    list_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tsg: Mapped[str | None] = mapped_column(
+        String(16), ForeignKey("tsgs.short_name"), nullable=True
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ListservMessageORM(Base):
     """Persisted ETSI LISTSERV message listing row keyed by canonical detail URL."""
 
     __tablename__ = "listserv_messages"
 
     url: Mapped[str] = mapped_column(String(1024), primary_key=True)
-    list_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    list_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("listserv_list.list_id"),
+        nullable=False,
+        index=True,
+    )
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     sender: Mapped[str] = mapped_column(Text, nullable=False)
     local_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
@@ -743,7 +760,9 @@ class ListservArchivePageORM(Base):
 
     __tablename__ = "listserv_archive_pages"
 
-    list_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    list_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("listserv_list.list_id"), primary_key=True
+    )
     page_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
     period: Mapped[str] = mapped_column(String(32), nullable=False)
     coverage: Mapped[str] = mapped_column(Text, nullable=False, default="[]")

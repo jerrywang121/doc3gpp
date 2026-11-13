@@ -136,6 +136,19 @@ def test_spec_sync_help() -> None:
     assert "every distinct TSG" in result.stdout
 
 
+@pytest.mark.parametrize("resource", ["meeting", "wi", "spec"])
+def test_sync_help_lists_all_schema_tsg_codes(resource: str) -> None:
+    schema_result = runner.invoke(app, ["tsg", "schema", "--format", "json"])
+    assert schema_result.exit_code == 0
+    rows = json.loads(schema_result.stdout)
+    codes = next(row["values"] for row in rows if row["field"] == "short_name").split(",")
+    assert "R6" in codes
+    result = runner.invoke(app, [resource, "sync", "--help"])
+    assert result.exit_code == 0
+    for code in codes:
+        assert f"`{code}`" in result.stdout, f"{resource} sync help missing {code}"
+
+
 def test_spec_sync_no_tsg_iterates_specs_distinct_tsgs(sqlite_env, monkeypatch) -> None:
     """``spec sync`` with no selector loops over the distinct TSGs in the
     specs table and calls :meth:`SpecService.sync` once per TSG."""

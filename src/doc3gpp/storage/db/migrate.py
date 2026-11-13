@@ -6,9 +6,12 @@ from sqlalchemy import inspect, text
 
 from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.base import Base
+from doc3gpp.storage.db.listserv_catalog import ensure_listserv_catalog
+from doc3gpp.storage.db.listserv_catalog_migration import upgrade_listserv_catalog
 from doc3gpp.storage.db.models import (
     ListservArchivePageORM,  # noqa: F401 - ensures model metadata is loaded
     ListservDetailORM,  # noqa: F401 - ensures model metadata is loaded
+    ListservListORM,  # noqa: F401 - ensures model metadata is loaded
     ListservMessageORM,  # noqa: F401 - ensures model metadata is loaded
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
     SpecDocChunkORM,  # noqa: F401 - registers specdata tables on SpecDataBase
@@ -967,6 +970,8 @@ def create_schema(scope: str = "all") -> None:
         _migrate_content_document_id_index()
         _migrate_content_token_count()
         Base.metadata.create_all(bind=engine)
+        ensure_listserv_catalog(engine)
+        upgrade_listserv_catalog(engine)
         _create_search_schema()
         _create_listserv_search_schema()
         _create_vector_schema()

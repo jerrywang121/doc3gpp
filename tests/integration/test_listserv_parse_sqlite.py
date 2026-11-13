@@ -1043,7 +1043,9 @@ def test_show_and_list_ids_make_no_network_calls_and_return_stored_data_and_unio
     monkeypatch.setattr(httpx.Client, "get", forbid_network)
 
     read_service = ListservService(repository=repository)
-    assert read_service.list_ids() == ["3GPP_TSG_RAN_WG1", "3GPP_TSG_SA_WG2"]
+    list_ids = read_service.list_ids()
+    assert list_ids == sorted(list_ids)
+    assert {"3GPP_TSG_RAN_WG1", "3GPP_TSG_SA_WG2"} <= set(list_ids)
 
     rec_parsed = read_service.show(parsed_url)
     assert rec_parsed.detail is not None

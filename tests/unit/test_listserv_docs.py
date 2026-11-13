@@ -390,9 +390,12 @@ def _assert_markdown_links_resolve(source: Path) -> None:
 
 
 def test_schema_reporting_matches_listserv_orm_columns() -> None:
+    from doc3gpp.storage.db.models import ListservListORM
+
     orm_by_table = {
         model.__tablename__: model
         for model in (
+            ListservListORM,
             ListservMessageORM,
             ListservDetailORM,
             ListservArchivePageORM,

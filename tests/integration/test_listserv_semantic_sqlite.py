@@ -28,7 +28,8 @@ from doc3gpp.repository.listserv import ListservRepository
 from doc3gpp.scraping.listserv_source import ListservSource
 from doc3gpp.settings.schema import SemanticSearchSettings, Settings
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.session import get_engine
+from doc3gpp.storage.db.models import ListservListORM
+from doc3gpp.storage.db.session import get_engine, get_session_factory
 from doc3gpp.storage.repositories.listserv_search_sql import (
     SQLAlchemyListservSearchRepository,
 )
@@ -1591,10 +1592,32 @@ def _large_vector_test_stack(repository, *, fanout_multiplier: int = 1):
 
 
 def _commit_large_vector_test_messages(repository, messages) -> None:
+    # These bulk-search fixtures bypass sync discovery, so create their FK
+    # parents explicitly before writing child message rows.
+    grouped_messages: dict[str, list[ListservMessage]] = {}
+    for message in messages:
+        grouped_messages.setdefault(message.list_id, []).append(message)
+
+    with get_session_factory()() as session:
+        for list_id in sorted(grouped_messages):
+            if session.get(ListservListORM, list_id) is None:
+                session.add(
+                    ListservListORM(
+                        list_id=list_id, tsg=None, description=None
+                    )
+                )
+        session.commit()
+
     coverage = parse_date_set([">= 2026-10-01", "<= 2026-10-02"])
-    page = _make_page()
-    for start in range(0, len(messages), 500):
-        repository.commit_page(page, messages[start : start + 500], coverage, ())
+    for list_id, list_messages in sorted(grouped_messages.items()):
+        page = _make_page(
+            list_id=list_id,
+            url=f"https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L={list_id}",
+        )
+        for start in range(0, len(list_messages), 500):
+            repository.commit_page(
+                page, list_messages[start : start + 500], coverage, ()
+            )
 
 
 def _seed_single_chunk_vectors(repository, vector_repo, messages, vectors, texts) -> None:

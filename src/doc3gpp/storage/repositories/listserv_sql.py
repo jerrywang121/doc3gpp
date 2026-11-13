@@ -7,6 +7,9 @@ from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from doc3gpp.cli_filters import (
@@ -21,18 +24,22 @@ from doc3gpp.models.listserv import (
     ListservAttachment,
     ListservDetail,
     ListservFilters,
+    ListservList,
     ListservMessage,
     ListservRecord,
     normalize_list_id,
     normalize_tdoc_ids,
     union_coverage,
 )
+from doc3gpp.models.listserv_catalog import infer_listserv_tsg
 from doc3gpp.repository.listserv import ListservRepository
 from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.models import (
     ListservArchivePageORM,
     ListservDetailORM,
+    ListservListORM,
     ListservMessageORM,
+    TsgORM,
 )
 from doc3gpp.storage.db.session import get_session_factory
 from doc3gpp.storage.repositories.rich_filters import apply_text_filter
@@ -55,9 +62,56 @@ class SQLAlchemyListservRepository(ListservRepository):
     ) -> None:
         """Atomically upsert page messages, union coverage, and persist pagination URLs."""
         with self._session_factory() as session:
+            if messages:
+                self._register_list_if_absent(session, page.list_id)
             self._upsert_messages(session, messages)
             self._upsert_coverage_and_next_urls(session, page, coverage, next_urls)
             session.commit()
+
+    def _register_list_if_absent(self, session: Session, list_id: str) -> None:
+        normalized_list_id = normalize_list_id(list_id)
+        if session.get(ListservListORM, normalized_list_id) is not None:
+            return
+
+        candidate_tsg = infer_listserv_tsg(normalized_list_id)
+        tsg = (
+            candidate_tsg
+            if candidate_tsg is not None
+            and session.get(TsgORM, candidate_tsg) is not None
+            else None
+        )
+        values = {
+            "list_id": normalized_list_id,
+            "tsg": tsg,
+            "description": None,
+        }
+        dialect_name = session.get_bind().dialect.name
+        if dialect_name == "sqlite":
+            statement = (
+                sqlite_insert(ListservListORM)
+                .values(**values)
+                .on_conflict_do_nothing(
+                    index_elements=[ListservListORM.list_id]
+                )
+            )
+            session.execute(statement)
+        elif dialect_name == "postgresql":
+            statement = (
+                postgresql_insert(ListservListORM)
+                .values(**values)
+                .on_conflict_do_nothing(
+                    index_elements=[ListservListORM.list_id]
+                )
+            )
+            session.execute(statement)
+        else:
+            try:
+                with session.begin_nested():
+                    session.add(ListservListORM(**values))
+                    session.flush()
+            except IntegrityError:
+                if session.get(ListservListORM, normalized_list_id) is None:
+                    raise
 
     def _upsert_messages(
         self, session: Session, messages: Sequence[ListservMessage]
@@ -264,15 +318,29 @@ class SQLAlchemyListservRepository(ListservRepository):
             ).all()
         return {str(url): int(rev) for url, rev in rows}
 
-    def list_ids(self) -> list[str]:
-        """Return distinct stored list IDs in ascending order."""
+    def has_list(self, list_id: str) -> bool:
+        """Return whether ``list_id`` exists in the LISTSERV catalog."""
+        normalized_list_id = normalize_list_id(list_id)
         with self._session_factory() as session:
-            stmt = (
-                select(ListservMessageORM.list_id)
-                .distinct()
-                .order_by(ListservMessageORM.list_id.asc())
+            return session.get(ListservListORM, normalized_list_id) is not None
+
+    def list_lists(self) -> list[ListservList]:
+        """Return catalog entries ordered by list ID."""
+        with self._session_factory() as session:
+            stmt = select(ListservListORM).order_by(ListservListORM.list_id.asc())
+            rows = session.scalars(stmt).all()
+        return [
+            ListservList(
+                list_id=row.list_id,
+                tsg=row.tsg,
+                description=row.description,
             )
-            return list(session.scalars(stmt).all())
+            for row in rows
+        ]
+
+    def list_ids(self) -> list[str]:
+        """Return catalog list IDs in ascending order."""
+        return [record.list_id for record in self.list_lists()]
 
     def select(self, filters: ListservFilters) -> list[ListservRecord]:
         """Return matching stored records ordered newest first with URL tie-break."""

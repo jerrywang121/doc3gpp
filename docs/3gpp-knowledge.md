@@ -693,10 +693,21 @@ complete inventory.
 ## ETSI LISTSERV archives
 
 The archive importer reads public pages from the HTTPS LISTSERV host
-`list.etsi.org`. It accepts an exact list ID without a hardcoded vocabulary;
+`list.etsi.org`. Sync accepts an exact list ID without a hardcoded vocabulary;
 IDs shown in examples (for example `RAN-WG1`) are illustrative, not an
-allowlist. The application's `listserv list` view reports only list IDs
-already represented by locally stored messages, not every upstream list.
+allowlist. The application's `listserv list` view reads a main-database
+catalog: it includes maintained reference entries and IDs discovered by sync,
+not an exhaustive upstream enumeration. A new ID is added only after a
+successfully parsed page yields a message matching the requested date filters;
+previously unknown zero-match pages are buffered for that sync and are not
+persisted if no matching page registers the list. The listing exposes `list_id`,
+`tsg`, and `description`; new discovery and legacy SQLite backfill preserve null
+metadata rather than inventing descriptions or unsupported TSG codes.
+
+R6 is the historical, closed RAN WG6 record: TSG short name `R6`, description
+`(CLOSED) GSM/EDGE Radio Access Network (GERAN) and UMTS Radio Access (UTRA)`,
+and no TSG URL. The LISTSERV catalog's predefined association is authoritative;
+do not infer or synthesize a replacement URL for R6.
 
 Archive week/month labels identify listing pages, not necessarily every
 message's displayed date. A displayed week may have multiple actual page URLs,

@@ -10,13 +10,14 @@ from doc3gpp.models.listserv import (
     DateSet,
     ListservDetail,
     ListservFilters,
+    ListservList,
     ListservMessage,
     ListservRecord,
 )
 
 
 class ListservRepository(Protocol):
-    """Storage operations for LISTSERV message listings, details, and page coverage."""
+    """Storage operations for the LISTSERV catalog, messages, details, and pages."""
 
     def commit_page(
         self,
@@ -48,8 +49,16 @@ class ListservRepository(Protocol):
         """Return stored message records keyed by canonical detail URL for ``urls``."""
         ...
 
+    def has_list(self, list_id: str) -> bool:
+        """Return whether ``list_id`` exists in the LISTSERV catalog."""
+        ...
+
+    def list_lists(self) -> list[ListservList]:
+        """Return catalog entries ordered by list ID."""
+        ...
+
     def list_ids(self) -> list[str]:
-        """Return distinct stored list IDs in ascending order."""
+        """Return catalog list IDs in ascending order."""
         ...
 
     def select(self, filters: ListservFilters) -> list[ListservRecord]:

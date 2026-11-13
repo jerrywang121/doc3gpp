@@ -327,6 +327,15 @@ class ListservBatchResult:
 
 
 @dataclass(slots=True, frozen=True)
+class ListservList:
+    """Immutable catalog metadata for one LISTSERV list."""
+
+    list_id: str
+    tsg: str | None
+    description: str | None
+
+
+@dataclass(slots=True, frozen=True)
 class ListservRecord:
     """Stored message listing joined with optional parsed detail."""
 
@@ -387,6 +396,7 @@ __all__ = [
     "ListservDetail",
     "ListservDetailMetadata",
     "ListservFilters",
+    "ListservList",
     "ListservMessage",
     "ListservRecord",
     "ListservSearchRecord",

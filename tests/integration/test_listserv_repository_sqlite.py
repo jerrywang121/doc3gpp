@@ -100,6 +100,85 @@ def test_empty_page_coverage_and_next_urls(repo: ListservRepository) -> None:
     )
 
 
+def test_commit_page_registers_unknown_parent_with_matching_messages(
+    repo: ListservRepository,
+) -> None:
+    list_id = "3gpp_tsg_ran_wg2_catalog_test"
+    page = ArchivePage(
+        list_id=list_id,
+        url="https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=3GPP_TSG_RAN_WG2_CATALOG_TEST",
+        period="2026-10-W1",
+    )
+    message = _make_message(
+        url="https://list.etsi.org/scripts/wa.exe?A2=ind2610A&L=3GPP_TSG_RAN_WG2_CATALOG_TEST&P=1",
+        list_id=list_id,
+    )
+    coverage = parse_date_set(["= 2026-10-01"])
+    next_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=3GPP_TSG_RAN_WG2_CATALOG_TEST&S=next"
+
+    assert not repo.has_list(list_id)
+    repo.commit_page(page, [message], coverage, [next_url])
+
+    assert repo.has_list(list_id)
+    assert repo.get(message.url) is not None
+    assert repo.get_coverage(page) == coverage
+    assert repo.get_next_urls(page) == (next_url,)
+
+
+def test_commit_page_does_not_register_unknown_list_for_empty_messages(
+    repo: ListservRepository,
+) -> None:
+    page = ArchivePage(
+        list_id="UNMATCHED_LIST",
+        url="https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=UNMATCHED_LIST",
+        period="2026-10-W1",
+    )
+
+    with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+        repo.commit_page(
+            page,
+            messages=(),
+            coverage=parse_date_set(["= 2026-10-01"]),
+            next_urls=["https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=UNMATCHED_LIST&S=next"],
+        )
+
+    assert not repo.has_list(page.list_id)
+    assert repo.get_coverage(page) == DateSet()
+    assert repo.get_next_urls(page) == ()
+
+
+def test_commit_page_failure_rolls_back_discovered_parent_and_child_rows(
+    repo: ListservRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    list_id = "3GPP_TSG_CT_WG99_CATALOG_TEST"
+    page = ArchivePage(
+        list_id=list_id,
+        url="https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=3GPP_TSG_CT_WG99_CATALOG_TEST",
+        period="2026-10-W1",
+    )
+    message = _make_message(
+        url="https://list.etsi.org/scripts/wa.exe?A2=ind2610A&L=3GPP_TSG_CT_WG99_CATALOG_TEST&P=1",
+        list_id=list_id,
+    )
+
+    def fail_after_parent_insert(*_args, **_kwargs) -> None:
+        raise RuntimeError("simulated failure after discovery insert")
+
+    monkeypatch.setattr(repo, "_upsert_coverage_and_next_urls", fail_after_parent_insert)
+    with pytest.raises(RuntimeError, match="after discovery insert"):
+        repo.commit_page(
+            page,
+            [message],
+            parse_date_set(["= 2026-10-01"]),
+            ["https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=3GPP_TSG_CT_WG99_CATALOG_TEST&S=next"],
+        )
+
+    assert not repo.has_list(list_id)
+    assert repo.get(message.url) is None
+    assert repo.get_coverage(page) == DateSet()
+    assert repo.get_next_urls(page) == ()
+
+
 def test_commit_page_rolls_back_rows_and_coverage_on_exception(
     sqlite_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -480,7 +559,9 @@ def test_select_filters_pagination_list_ids_and_iter_for_parse(
     repo.commit_page(p1, [m1, m2], parse_date_set(["= 2026-10-01"]), ())
     repo.commit_page(p2, [m3], parse_date_set(["= 2026-10-02"]), ())
 
-    assert repo.list_ids() == ["3GPP_TSG_RAN_WG1", "3GPP_TSG_SA_WG2"]
+    list_ids = repo.list_ids()
+    assert list_ids == sorted(list_ids)
+    assert {"3GPP_TSG_RAN_WG1", "3GPP_TSG_SA_WG2"} <= set(list_ids)
 
     # Equal timestamp tie-break uses deterministic URL ascending
     ran_rows = repo.select(ListservFilters(list_id="3gpp_tsg_ran_wg1"))
@@ -518,6 +599,7 @@ def test_schema_is_main_only_idempotent_and_reported(sqlite_env) -> None:
     spec_tables = set(inspect(get_specdata_engine()).get_table_names())
 
     expected_listserv_tables = {
+        "listserv_list",
         "listserv_messages",
         "listserv_details",
         "listserv_archive_pages",
@@ -534,10 +616,12 @@ def test_schema_is_main_only_idempotent_and_reported(sqlite_env) -> None:
     from doc3gpp.storage.db.models import (
         ListservArchivePageORM,
         ListservDetailORM,
+        ListservListORM,
         ListservMessageORM,
     )
 
     orm_by_table = {
+        "listserv_list": ListservListORM,
         "listserv_messages": ListservMessageORM,
         "listserv_details": ListservDetailORM,
         "listserv_archive_pages": ListservArchivePageORM,

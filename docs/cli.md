@@ -3425,6 +3425,9 @@ the message's displayed calendar date. `--force` makes sync revisit selected
 archive pages regardless of stored coverage; on parse it reparses already
 parsed messages. Sync fetches listings only; parse is a separate operation over
 stored messages. Neither operation has an implicit read-time counterpart.
+Sync selects archive months intersecting the requested dates plus one neighboring
+month on each side; unusually dated messages on more distant pages can be missed.
+`--force` revisits selected pages but does not expand the date-based selection.
 
 `listserv search` accepts `--date`, `--list-id`, `--from`, `--subject`,
 `--tdocs`, `--text`, `--semantic`, `--limit`, `--offset`, and

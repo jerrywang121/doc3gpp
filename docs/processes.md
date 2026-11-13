@@ -434,16 +434,23 @@ value uses midnight as a placeholder. Aware times sort by instant, with a
 wall-clock fallback for unknown zones; ordering involving unknown-zone or
 day-only values is approximate.
 
+Sync selects A1 listings from the A0 index by month: it fetches the months
+intersecting each requested date interval, plus one neighboring month on each
+side for messages whose displayed dates cross a month boundary. It then applies
+the exact date predicate to each message. This bounded scan can miss messages
+whose displayed dates differ from their archive-page month by more than one
+month; even `--force` does not expand the selected months. To retrieve such a
+message, sync a date range that also includes its archive-page month.
+
 Coverage belongs to the actual archive-page URL, not its week/month label:
-ETSI may split one week across multiple pages, and a message date can differ
-from the page label. For a cataloged list, successful empty pages are covered;
-unrecognized or failed pages remain retryable. Historical pages are skipped
-only when recorded successful coverage includes the requested date predicate.
-The newest upstream period (week, or a month-only latest label) is revisited
-each sync; `--force` revisits every selected page. Page messages, pagination
-links, and coverage commit atomically, so a failed page does not imply coverage.
-A conservative first filtered scan can fetch more historical pages than the
-displayed period suggests.
+ETSI may split one week across multiple pages. For a cataloged list, successful
+empty pages are covered; unrecognized or failed pages remain retryable. Among
+selected pages, historical pages are skipped when recorded successful coverage
+includes the requested date predicate. The newest upstream period (week, or a
+month-only latest label), if selected, is revisited each sync; `--force` revisits
+every selected page. Page messages, pagination links, and coverage commit
+atomically, so a failed page does not imply coverage. The processed and skipped
+counts refer to selected pages; out-of-range A1 pages are not counted.
 
 ### Catalog discovery and legacy databases
 

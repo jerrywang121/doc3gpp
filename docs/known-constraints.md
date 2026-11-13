@@ -176,9 +176,10 @@ runtime context see [processes](processes.md); proposed work is in [TODO](TODO.m
   successful message discovery; it is not an exhaustive upstream inventory.
   Unknown IDs are registered only after a message matches the requested dates.
   Empty pages before that match are buffered only for the current sync and are
-  discarded if no list is registered. Sync coverage is URL/predicate based and
-  may scan broadly when archive labels cannot prove date bounds. `--force`
-  deliberately revisits selected pages.
+  discarded if no list is registered. Sync coverage is URL/predicate based;
+  page selection uses the requested months plus one neighboring month on each
+  side. Messages with displayed dates farther from their archive-page month may
+  be missed. `--force` revisits selected pages but does not expand that range.
 - The automatic legacy catalog upgrade is specific to LISTSERV tables in the
   main SQLite database. It backfills old message/page IDs with null metadata and
   rebuilds legacy child tables when needed to add foreign keys; `create_all`

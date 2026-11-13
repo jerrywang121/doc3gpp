@@ -711,8 +711,10 @@ do not infer or synthesize a replacement URL for R6.
 
 Archive week/month labels identify listing pages, not necessarily every
 message's displayed date. A displayed week may have multiple actual page URLs,
-and a listing can contain a message dated outside its label. Stored coverage is
-therefore keyed by page URL and date predicate. For month-only pages, a message's
+and a listing can contain a message dated outside its label. Sync selects months
+within a one-month margin of the requested dates; messages dated farther from
+their page's month can be missed. Stored coverage is keyed by page URL and date
+predicate. For month-only pages, a message's
 week is derived from its displayed calendar day. When available, the source
 datetime and offset are retained; dates without a time carry date precision,
 and an unknown time zone is not invented.

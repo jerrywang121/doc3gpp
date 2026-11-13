@@ -22,6 +22,7 @@ import httpx
 
 from doc3gpp.models.listserv import (
     ArchivePage,
+    DateSet,
     ListservBatchResult,
     ListservMessage,
     ListservRecord,
@@ -90,6 +91,25 @@ def _period_sort_key(period: str) -> tuple[int, int, int]:
     week_raw = match.group("week")
     week = int(week_raw) if week_raw is not None else 0
     return (year, month, week)
+
+
+def _period_matches_dates(period: str, dates: DateSet) -> bool:
+    """Select requested months and their immediate neighbors for possible spillover."""
+    year, month, _week = _period_sort_key(period)
+    if not year or not month:
+        return bool(dates.intervals)
+    page_month = year * 12 + month
+    for interval in dates.intervals:
+        if interval.start is not None:
+            start_month = interval.start.year * 12 + interval.start.month - 1
+            if page_month < start_month:
+                continue
+        if interval.end is not None:
+            end_month = interval.end.year * 12 + interval.end.month + 1
+            if page_month > end_month:
+                continue
+        return True
+    return False
 
 
 def _is_newest_period(period: str, newest_key: tuple[int, int, int]) -> bool:
@@ -316,7 +336,9 @@ class ListservSyncService:
             pending: deque[ArchivePage] = deque()
             seen_urls: set[str] = set()
             for page in index_pages:
-                if page.url not in seen_urls:
+                if page.url not in seen_urls and _period_matches_dates(
+                    page.period, requested_dates
+                ):
                     seen_urls.add(page.url)
                     pending.append(page)
 

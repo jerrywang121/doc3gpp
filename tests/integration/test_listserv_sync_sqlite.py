@@ -284,11 +284,106 @@ def test_no_date_sync_stores_only_preceding_year_through_today_on_displayed_date
     )
 
 
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize(
+    ("dates", "selected"),
+    [
+        (["= 2026-01-15"], {"dec25", "jan26", "jan26_split", "feb26"}),
+        ([">= 2026-10-01"], {"sep26", "oct26", "nov26", "dec26"}),
+        (["<= 2026-01-15"], {"nov25", "dec25", "jan26", "jan26_split", "feb26"}),
+        (
+            [">= 2026-01-01", "<= 2026-01-31", "!= 2026-01-15"],
+            {"dec25", "jan26", "jan26_split", "feb26"},
+        ),
+        (["= 2026-01-15", "!= 2026-01-15"], set()),
+        (
+            [],
+            {"nov25", "dec25", "jan26", "jan26_split", "feb26", "mar26", "sep26", "oct26", "nov26"},
+        ),
+    ],
+)
+def test_sync_fetches_only_requested_months_and_one_neighbor_on_each_side(
+    repository: ListservRepository,
+    dates: list[str],
+    selected: set[str],
+    force: bool,
+) -> None:
+    list_id = "3GPP_TSG_RAN_WG5"
+    index_url = archive_index_url(list_id)
+    pages = {
+        "nov25": ("ind2511", "November 2025"),
+        "dec25": ("ind2512", "December 2025"),
+        "jan26": ("ind2601A", "January 2026, Week 1"),
+        "jan26_split": ("ind2601A_1", "January 2026, Week 1"),
+        "feb26": ("ind2602A", "February 2026, Week 1"),
+        "mar26": ("ind2603", "March 2026"),
+        "sep26": ("ind2609", "September 2026"),
+        "oct26": ("ind2610", "October 2026"),
+        "nov26": ("ind2611", "November 2026"),
+        "dec26": ("ind2612", "December 2026"),
+    }
+    urls = {
+        key: f"https://list.etsi.org/scripts/wa.exe?A1={suffix}&L={list_id}"
+        for key, (suffix, _label) in pages.items()
+    }
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html([(urls[key], label) for key, (_suffix, label) in pages.items()]),
+            **{url: _listing_html([], empty_notice="No messages") for url in urls.values()},
+        }
+    )
+    service = ListservSyncService(
+        repository=repository, source=source, today_fn=lambda: date(2026, 10, 15), max_workers=1
+    )
+
+    result = service.sync(list_id, dates=dates, force=force)
+
+    assert result.failures == {}
+    assert set(source.requests) == {index_url, *(urls[key] for key in selected)}
+
+
+def test_sync_keeps_matching_message_on_next_months_paginated_page(
+    repository: ListservRepository,
+) -> None:
+    list_id = "3GPP_TSG_RAN_WG5"
+    index_url = archive_index_url(list_id)
+    february_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2602A&L={list_id}"
+    next_url = f"{february_url}&S=next"
+    march_url = f"https://list.etsi.org/scripts/wa.exe?A1=ind2603A&L={list_id}"
+    matching_url = f"https://list.etsi.org/scripts/wa.exe?A2=ind2602A&L={list_id}&P=1"
+    excluded_url = f"https://list.etsi.org/scripts/wa.exe?A2=ind2602A&L={list_id}&P=2"
+    source = RecordingFakeSource(
+        pages={
+            index_url: _index_html(
+                [(february_url, "February 2026, Week 1"), (march_url, "March 2026, Week 1")]
+            ),
+            february_url: _listing_html(
+                [], next_links=[(next_url, "Next Page")], empty_notice="No messages"
+            ),
+            next_url: _listing_html(
+                [
+                    (matching_url, "January message", "Alice", "2026-01-15 10:00:00 +0000"),
+                    (excluded_url, "Outside filter", "Bob", "2026-02-01 10:00:00 +0000"),
+                ]
+            ),
+        }
+    )
+    service = ListservSyncService(repository=repository, source=source, max_workers=1)
+
+    result = service.sync(list_id, dates=["= 2026-01-15"])
+
+    assert result.failures == {}
+    assert set(source.requests) == {index_url, february_url, next_url}
+    assert repository.get(matching_url) is not None
+    assert repository.get(excluded_url) is None
+    assert repository.get_coverage(ArchivePage(list_id, march_url, "2026-03-W1")) == DateSet()
+
+
 def test_disjoint_ranges_and_not_equal_preserve_holes_and_changing_predicates_refetch(
     repository: ListservRepository,
 ) -> None:
     index_url = archive_index_url("EXAMPLE")
-    newest_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=EXAMPLE"
+    newest_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2604A&L=EXAMPLE"
     march_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2603B&L=EXAMPLE"
 
     m_mar_05 = "https://list.etsi.org/scripts/wa.exe?A2=ind2603B&L=EXAMPLE&P=1"
@@ -299,7 +394,7 @@ def test_disjoint_ranges_and_not_equal_preserve_holes_and_changing_predicates_re
         pages={
             index_url: _index_html(
                 [
-                    (newest_url, "October 2026, Week 1"),
+                    (newest_url, "April 2026, Week 1"),
                     (march_url, "March 2026, Week 2"),
                 ]
             ),
@@ -510,7 +605,7 @@ def test_pagination_urls_traversed_and_covered_even_when_parent_is_already_cover
     repository: ListservRepository,
 ) -> None:
     index_url = archive_index_url("EXAMPLE")
-    newest_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2610A&L=EXAMPLE"
+    newest_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2607A&L=EXAMPLE"
     parent_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2606A&L=EXAMPLE"
     page2_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2606A&L=EXAMPLE&S=page2"
     page3_url = "https://list.etsi.org/scripts/wa.exe?A1=ind2606A&L=EXAMPLE&S=page3"
@@ -523,7 +618,7 @@ def test_pagination_urls_traversed_and_covered_even_when_parent_is_already_cover
         pages={
             index_url: _index_html(
                 [
-                    (newest_url, "October 2026, Week 1"),
+                    (newest_url, "July 2026, Week 1"),
                     (parent_url, "June 2026, Week 1"),
                 ]
             ),

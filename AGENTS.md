@@ -95,6 +95,9 @@ shared HTTP/MCP/CLI payload serializers. Keep ORM/schema reporting aligned and
 never add attachment downloads or implicit read-time work. Catalog listings
 return immutable `ListservList` records; retain the `list_ids` compatibility
 array and do not expose ORM entities.
+Sync selects A1 archive months overlapping requested dates plus one neighboring
+month on each side; displayed message dates farther from the page label may be
+missed. Force refreshes selected pages but does not expand that selection.
 Reply-boundary detection is conservative and best-effort; parser improvements
 require a forced reparse of stored messages.
 Web LISTSERV facades and worker-built sync/parse services borrow the app's lazy

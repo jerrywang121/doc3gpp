@@ -104,6 +104,14 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "get_job",
         "cancel_job",
         "list_jobs",
+        "listserv_sync",
+        "listserv_parse",
+        "listserv_parse_item",
+        "listserv_list",
+        "listserv_search",
+        "listserv_show",
+        "listserv_index_status",
+        "listserv_index_rebuild",
     }
     assert names == expected
     get_tdoc_tool = next(tool for tool in tools if tool.name == "get_tdoc")
@@ -181,7 +189,7 @@ def test_call_list_meetings_empty(sqlite_env) -> None:
 
 
 def test_call_list_tsgs_returns_rows(sqlite_env) -> None:
-    """Parity: GET /tsgs?format=json shape (tsg_rows with default fields)."""
+    """The TSG tool includes automatic defaults and preserves stored custom rows."""
     import asyncio
 
     from doc3gpp.models.tsg import Tsg
@@ -205,10 +213,17 @@ def test_call_list_tsgs_returns_rows(sqlite_env) -> None:
     import json
 
     payload = json.loads(result.content[0].text)
-    assert sorted(payload, key=lambda t: t["short_name"]) == [
-        {"tsg_name": "RAN", "short_name": "RAN", "description": "Radio"},
-        {"tsg_name": "SA", "short_name": "SA", "description": "Services"},
-    ]
+    by_short_name = {row["short_name"]: row for row in payload}
+    assert by_short_name["RAN"] == {
+        "tsg_name": "RAN",
+        "short_name": "RAN",
+        "description": "Radio",
+    }
+    assert by_short_name["SA"] == {
+        "tsg_name": "SA",
+        "short_name": "SA",
+        "description": "Services",
+    }
     get_engine.cache_clear()
     del state.engine
 
@@ -617,7 +632,7 @@ def _seed_spec_corpus() -> None:
     from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 
     SQLAlchemyTsgRepository().upsert_many(
-        [Tsg(tsg_name="RAN", short_name="R5", description="Radio Access Network")],
+        [Tsg(tsg_name="RAN WG5", short_name="R5", description="Radio Access Network")],
     )
     repo = SQLAlchemySpecRepository()
     repo.upsert(

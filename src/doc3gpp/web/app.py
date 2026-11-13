@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -52,14 +53,16 @@ def build_state(settings: Settings) -> WebState:
     embedder: object | None = None
     embedder_loaded = False
     embedder_builder = factory.build_embedder
+    embedder_lock = threading.Lock()
     docx_pool = DocxConvertPool(settings.pipeline.docx_workers)
 
     def shared_embedder() -> object | None:
         nonlocal embedder, embedder_loaded
-        if not embedder_loaded:
-            embedder = embedder_builder(settings)
-            embedder_loaded = True
-        return embedder
+        with embedder_lock:
+            if not embedder_loaded:
+                embedder = embedder_builder(settings)
+                embedder_loaded = True
+            return embedder
 
     def close_shared_embedder() -> None:
         if embedder is None:
@@ -135,7 +138,22 @@ def build_state(settings: Settings) -> WebState:
         tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),
         tdoc_content=factory.build_tdoc_content_service(settings=settings),
+        listserv=factory.build_listserv_service(settings),
+        listserv_search=factory.build_listserv_search_service(
+            settings, embedder_factory=shared_embedder
+        ),
+        listserv_index=factory.build_listserv_index_service(
+            settings, embedder_factory=shared_embedder
+        ),
+        listserv_embedder_factory=shared_embedder,
     )
+
+    def close_listserv_services() -> None:
+        for service in (services.listserv_search, services.listserv_index):
+            close = getattr(service, "close", None)
+            if callable(close):
+                close()
+
     return WebState(
         settings=settings,
         engine=engine,
@@ -145,6 +163,7 @@ def build_state(settings: Settings) -> WebState:
         specdata_engine=get_specdata_engine(),
         close_embedder=close_shared_embedder,
         close_docx_pool=docx_pool.close,
+        close_listserv_services=close_listserv_services,
     )
 
 
@@ -238,6 +257,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             await handle.shutdown()
             if state.close_docx_pool is not None:
                 state.close_docx_pool()
+            if state.close_listserv_services is not None:
+                state.close_listserv_services()
             if state.close_embedder is not None:
                 state.close_embedder()
             state.engine.dispose()

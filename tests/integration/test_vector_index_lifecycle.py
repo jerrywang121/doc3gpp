@@ -140,7 +140,7 @@ def test_rebuild_batch_walks_all_tdocs(sqlite_env, monkeypatch):
         conn.execute(
             text(
                 "INSERT INTO tsgs (tsg_name, short_name, description) "
-                "VALUES ('RAN WG1', 'RAN1', '')"
+                "VALUES ('RAN WG1 test fixture', 'RAN1', '')"
             )
         )
         conn.execute(
@@ -190,7 +190,7 @@ def test_rebuild_batch_resumes_from_after_id(sqlite_env):
         conn.execute(
             text(
                 "INSERT INTO tsgs (tsg_name, short_name, description) "
-                "VALUES ('RAN WG1', 'RAN1', '')"
+                "VALUES ('RAN WG1 test fixture', 'RAN1', '')"
             )
         )
         conn.execute(
@@ -300,7 +300,7 @@ def test_count_tdocs_to_index_respects_after_id(sqlite_env):
         conn.execute(
             text(
                 "INSERT INTO tsgs (tsg_name, short_name, description) "
-                "VALUES ('RAN WG1', 'RAN1', '')"
+                "VALUES ('RAN WG1 test fixture', 'RAN1', '')"
             )
         )
         conn.execute(

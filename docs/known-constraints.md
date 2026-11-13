@@ -96,7 +96,7 @@ runtime context see [processes](processes.md); proposed work is in [TODO](TODO.m
   coverage for every word in every source.
 - Superseded ZIP URLs remain searchable while their content rows remain stored.
   Rebuilding reads stored URLs; it does not remove historical content.
-- LIKE-based vector filters run after bounded KNN windows. Widening stops at
+- TDoc LIKE-based vector filters run after bounded KNN windows. Widening stops at
   4096 candidate rows, so selective filters can return fewer than the requested
   number of hits even when other matching corpus rows exist.
 - Legacy/stale vector provenance can produce `matched_chunk: null`. A whole-file
@@ -145,3 +145,67 @@ runtime context see [processes](processes.md); proposed work is in [TODO](TODO.m
   SQL job logs are durable, but throttled-away progress is not replayed later.
 - The packaged release workflow is not an automated test matrix. Local offline
   tests and fixture/cache isolation remain necessary, including xdist coverage.
+
+## LISTSERV archives
+
+- Only public HTTPS LISTSERV pages on `list.etsi.org` are supported. Authenticated
+  or private archives are out of scope; external/unsafe redirect and embedded
+  body targets are rejected. The parser fetches the message body representation
+  when needed, but attachment bytes are never downloaded.
+- Requests negotiate `gzip, deflate, identity`; only one of those encodings is
+  accepted. Brotli, Zstandard, unknown, and stacked encodings are rejected before
+  the response body is read. Each LISTSERV HTTP response is limited internally
+  to 16 MiB after decoding, with decompressor output produced in chunks no larger
+  than 64 KiB. Larger pages are rejected before the full response is buffered;
+  this safety limit has no public setting and can reject unusually large valid
+  pages. It bounds decoded-body buffering, not total process RSS or an arbitrary
+  raw transport chunk allocated below the application.
+- Quote removal is best-effort because email quoting has no universal structure.
+  When a plain-text boundary is uncertain, the parser favors preserving current
+  text; quoted material can therefore remain in a format it does not recognize.
+- The stored body is capped by `[listserv].max_content_chars` (10,000 Unicode
+  characters by default). Search has a separate 200-character preview.
+  `content_truncated` and `preview_truncated` describe these distinct cuts;
+  text discarded before storage cannot be recovered by `show` or an index
+  rebuild. TDoc IDs are extracted before the storage cut, but discarded body
+  text itself is not indexed.
+- Unknown-zone and date-only messages use a deterministic fallback for ordering;
+  newest-first order involving them is an approximation, not guaranteed
+  chronology. Date comparisons still use the displayed calendar day.
+- The LISTSERV catalog is seeded reference data plus IDs accepted through
+  successful message discovery; it is not an exhaustive upstream inventory.
+  Sync registers unknown IDs only after a message matches the requested dates;
+  explicit parse-item registers an unknown list only after its message and detail
+  commit successfully. Parse-item requires a valid public A2 item URL and an
+  unambiguous detail-page header, does not scan archive pages or create coverage,
+  and skips an existing parsed detail unless forced.
+  Empty pages before that match are buffered only for the current sync and are
+  discarded if no list is registered. Sync coverage is URL/predicate based;
+  page selection uses the requested months plus one neighboring month on each
+  side. Messages with displayed dates farther from their archive-page month may
+  be missed. `--force` revisits selected pages but does not expand that range.
+- The automatic legacy catalog upgrade is specific to LISTSERV tables in the
+  main SQLite database. It backfills old message/page IDs with null metadata and
+  rebuilds legacy child tables when needed to add foreign keys; `create_all`
+  alone cannot retrofit SQLite constraints. Unsupported table shapes or
+  non-SQLite legacy schemas without the required relationships fail explicitly.
+  This targeted upgrade is not a general database migration system.
+- LISTSERV FTS/vector data are derived indexes. A failed update can leave source
+  rows committed while an index remains stale; inspect status and rebuild from
+  stored SQL data. Semantic/hybrid search requires optional vector/embedding
+  support; filter-only and FTS paths are independent of it. Deep or highly
+  chunk-crowded semantic/hybrid pages use exact filtered cosine scoring when the
+  4096-row KNN window would be incomplete; this can be expensive on large
+  corpora, but there is no public offset ceiling.
+- HTTP/MCP LISTSERV operations use the existing single-process job worker.
+  Cancellation is cooperative, may leave completed writes in place, and does
+  not terminate an in-flight network call. MCP stdio drains blocked handlers
+  and its own worker executor before closing shared resources, so a stuck
+  handler can delay shutdown indefinitely. See
+  [runtime details](processes.md#listserv-archive-flow) and the preceding
+  [pool/job constraints](#pools-jobs-and-deployment).
+- Web LISTSERV facades and worker-built sync/parse services borrow the app's
+  lazy shared embedder. Per-job source/index resources close on their worker;
+  app facades close only after drain and before the shared embedder. Standalone
+  callers must close factory-built services they own; borrowed embedders remain
+  caller-owned.

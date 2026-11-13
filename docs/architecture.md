@@ -133,3 +133,24 @@ The web job queue persists requests and logs in SQL, while in-process handles
 own cancellation events, bounded SSE queues, and pipeline resources. It is a
 single-process coordinator, not a distributed queue. Capacity and cancellation
 guarantees are defined in [pools and jobs](processes.md#pools-and-background-jobs).
+
+## LISTSERV source and derived data
+
+Public LISTSERV messages use the existing layers: `listserv_source.py` is
+restricted HTTPS transport, archive/detail parsers are pure, services coordinate
+sync/parse/search/index over repository protocols, and CLI/HTTP/UI/MCP adapters
+share payload serializers. The main database owns the `listserv_list` catalog
+and the ORM-backed source tables `listserv_messages`, `listserv_details`, and
+`listserv_archive_pages`. Message and archive-page rows reference the catalog;
+details remain linked through their message. LISTSERV FTS/vector data are
+derived sidecars there as well, not a fourth database or a source of truth. The
+schema registry is checked against all four LISTSERV ORM tables. Catalog reads
+map rows to immutable `ListservList` domain records rather than exposing ORM
+entities.
+
+Each page's messages, pagination links, and date coverage commit atomically;
+parsed detail replacement is atomic per message. Source revisions drive
+independent FTS/vector freshness. A failed derived update leaves committed
+source data intact and stale for repair. Search and show payload builders are
+shared by CLI, HTTP, and MCP; reads are SQL-only and never sync, parse, or
+download content. See [LISTSERV runtime behavior](processes.md#listserv-archive-flow).

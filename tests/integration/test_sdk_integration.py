@@ -183,10 +183,10 @@ def test_sdk_tsg_seed_and_list(sqlite_env) -> None:
     create_schema()
     service = TsgService(SQLAlchemyTsgRepository())
     seeded = service.seed_defaults()
-    assert seeded == 19
+    assert seeded == 20
 
     all_rows = service.list_all()
-    assert len(all_rows) == 19
+    assert len(all_rows) == 20
 
     # Case-insensitive lookup for both short name and tsg_name
     r5 = service.get_by_short_name("r5")
@@ -204,7 +204,7 @@ def test_sdk_tsg_seed_and_list(sqlite_env) -> None:
 
     # Re-seeding is idempotent (no row duplication)
     service.seed_defaults()
-    assert len(service.list_all()) == 19
+    assert len(service.list_all()) == 20
 
     # URL builder composes the project URL pattern
     assert (

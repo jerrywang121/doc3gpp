@@ -1,0 +1,41 @@
+<div id="listserv-results">
+  <p class="meta">{{ hits|length }} result{{ '' if hits|length == 1 else 's' }} · offset {{ offset }}</p>
+  <nav class="pagination">
+    {% if offset > 0 %}
+      <a href="{{ request.url.include_query_params(offset=offset - limit) if offset >= limit else request.url.remove_query_params('offset') }}">‹ prev</a>
+    {% endif %}
+    {% if hits %}<span>Showing {{ offset + 1 }}–{{ offset + hits|length }}</span>{% endif %}
+    {% if next_offset is not none %}
+      <a href="{{ request.url.include_query_params(offset=next_offset) }}">next ›</a>
+    {% endif %}
+  </nav>
+  {% if hits %}
+    <ul class="listserv-results">
+      {% for hit in hits %}
+        <li class="card">
+          <h3><a href="/listserv/show?url={{ hit.url|urlencode }}">{{ hit.subject }}</a></h3>
+          <p>{{ hit.list_id }} · {{ hit.sender }} · {{ hit.date }}</p>
+          <p>TDocs: {{ hit.tdocs|join(", ") if hit.tdocs else "None" }}</p>
+          {% if hit.content_preview is none %}
+            <p>Message content has not been parsed.</p>
+            <form id="listserv-result-parse-{{ loop.index }}" class="listserv-result-parse-form" method="post" action="/api/listserv/parse-item">
+              <input type="hidden" name="url" value="{{ hit.url }}">
+              <button type="submit" class="btn">Parse now</button>
+              <span class="sync-queued" data-label="Item parse job queued" style="display:none">Item parse job queued</span>
+              <div id="listserv-result-parse-{{ loop.index }}-job-target"></div>
+            </form>
+          {% else %}
+            <pre>{{ hit.content_preview }}</pre>
+            {% if hit.preview_truncated %}<p class="meta">Preview truncated to 200 characters.</p>{% endif %}
+          {% endif %}
+          {% if hit.content_truncated %}<p class="meta">Stored content was truncated; discarded original text is unavailable.</p>{% endif %}
+          {% if hit.snippet %}<p class="meta">Search match ({{ hit.matched_source or 'message' }}): {{ hit.snippet }}</p>{% endif %}
+          {% if hit.score is not none %}<p class="meta">Score: {{ hit.score }}</p>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No stored messages match these filters.</p>
+  {% endif %}
+
+</div>

@@ -295,7 +295,7 @@ def test_index_rebuild_reads_sql_content_after_cache_purge_without_download(
         connection.execute(
             text(
                 "INSERT OR IGNORE INTO tsgs (tsg_name, short_name, description) "
-                "VALUES ('RAN WG1', 'RAN1', 'TSG RAN WG1')"
+                "VALUES ('RAN WG1 test fixture', 'RAN1', 'TSG RAN WG1')"
             )
         )
         connection.execute(

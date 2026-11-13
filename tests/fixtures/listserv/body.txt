@@ -1,0 +1,18 @@
+Dear colleagues,
+
+Please find the updated notes for R1-2610793 (duplicate r1-2610793), RP-2601234, and R5s260009.
+Note that power > 0 dBm in table 2 is regular technical prose, not a quote block.
+Also literal <script>alert(1)</script> and [bad](javascript:alert(2)) must be safe.
+Tail reference after long padding: C6-250028.
+
+On 2026-09-30 14:20, Old Sender <[log in to unmask]> wrote:
+> Previously we discussed R1-111111 in the last meeting.
+> Please ignore R1-111111.
+
+-----Original Message-----
+From: Someone <[log in to unmask]>
+Sent: Tuesday, September 29, 2026 9:00 AM
+To: EXAMPLE <[log in to unmask]>
+Subject: Prior thread R3-333333
+
+Forwarded content mentioning R3-333333 that belongs to the previous message.

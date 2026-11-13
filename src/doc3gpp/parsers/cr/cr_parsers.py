@@ -57,7 +57,7 @@ def _parse_cover_date(raw: str) -> _date | None:
         try:
             # The upstream field is a date-only value; discard the temporary
             # naive datetime immediately after parsing it.
-            return _datetime.strptime(text, fmt).date()  # noqa: DTZ007
+            return _datetime.strptime(text, fmt).date()
         except ValueError:
             continue
     logger.warning(

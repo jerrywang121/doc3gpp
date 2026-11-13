@@ -88,7 +88,7 @@ Behavior:
 - Calls `create_schema(scope)` — only the selected scope's schema is
   created (`tsgs` is seeded when main is in scope).
 - Creates currently defined ORM tables if they do not exist.
-- Seeds the `tsgs` table with the canonical 3GPP TSG list (19 rows). Existing
+- Seeds the `tsgs` table with the canonical 3GPP TSG list (20 rows). Existing
   rows are refreshed in place, so re-running this command is safe.
 - After upgrading an existing database to a release that adds TDoc ZIP
   inventory, run `doc3gpp db init --scope main` before TDoc reads or parses.
@@ -309,7 +309,7 @@ Behavior:
   `nullable`, `description`, `values`.
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
-- `values` is a comma-joined string of the fixed set (e.g. the 19
+- `values` is a comma-joined string of the fixed set (e.g. the 20
   TSG short names on `meetings.tsg`); `"-"` when the field is
   free-form.
 
@@ -2295,8 +2295,9 @@ Purpose:
 Behavior:
 
 - Creates the schema (idempotent).
-- Upserts the 19 canonical rows; existing rows are updated in place rather
-  than duplicated. URLs are composed from the project URL pattern.
+- Upserts the 20 canonical rows; existing rows are updated in place rather
+  than duplicated. URLs are composed from the project URL pattern, except
+  historical RAN WG6 (`R6`), which has no URL.
 
 Examples:
 
@@ -2328,8 +2329,8 @@ Behavior:
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
 - `values` is a comma-joined string of the fixed set (`short_name`
-  carries all 19 canonical codes
-  `RP,R1,R2,R3,R4,R5,RT,SP,S1,S2,S3,S4,S5,S6,CP,C1,C3,C4,C6`);
+  carries all 20 canonical codes
+  `RP,R1,R2,R3,R4,R5,R6,RT,SP,S1,S2,S3,S4,S5,S6,CP,C1,C3,C4,C6`);
   `"-"` when the field is free-form.
 
 Examples:
@@ -2447,7 +2448,7 @@ Behavior:
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
 - `values` is a comma-joined string of the fixed set (`tsg_short`
-  carries the 19 TSG short names); `"-"` when the field is
+  carries the 20 TSG short names); `"-"` when the field is
   free-form (e.g. `release`, scraped verbatim).
 
 Examples:
@@ -2705,7 +2706,7 @@ Behavior:
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
 - `values` is a comma-joined string of the fixed set (`specs.type`
-  `TS,TR`; `tsg` carries the 19 TSG short names); `"-"` when the
+  `TS,TR`; `tsg` carries the 20 TSG short names); `"-"` when the
   field is free-form (e.g. `status`, scraped verbatim). The
   transient fields `SpecVersion.wki_id` and `SpecVersion.zip_files` are not
   persisted and have no descriptor rows.
@@ -3385,3 +3386,88 @@ doc3gpp server logs --follow
 doc3gpp server stop
 doc3gpp server uninstall systemd
 ```
+
+## LISTSERV commands
+
+The `listserv` group works with **public** ETSI LISTSERV archives on
+`https://list.etsi.org`. Sync and parse accept an exact public list ID, not a
+local allowlist. `3GPP_TSG_RAN_WG5` is the public RAN5 list, not an allowlist.
+`listserv list` reads the main-database catalog rather than upstream pages or
+only message rows. It prints tab-separated `list_id`, `tsg`, and `description`
+columns in ID order; null metadata is shown as `-`. The catalog includes
+pre-seeded reference entries and lists discovered by sync or explicit item parsing, including entries
+that do not yet have stored messages.
+Use `--format json` for an array of objects with `list_id`, `tsg`, and
+`description`; missing metadata remains JSON `null`. The default is `table`.
+Optional `--list-id` and `--tsg` filters intersect and use the shared rich SQL
+LIKE grammar: plain values match exactly, `%` and `_` are wildcards, `!` negates
+a pattern, and `null` / `not-null` test SQL nullability. SQL negation does not
+match a null TSG.
+
+```bash
+# Sync message listings. Without --date, cover the rolling preceding calendar
+# year through today, inclusive; repeated filters intersect.
+doc3gpp listserv sync 3GPP_TSG_RAN_WG5
+doc3gpp listserv sync 3GPP_TSG_RAN_WG5 --date '>= 2026-10-01' --date '<= 2026-10-31'
+
+# Parse already-synced messages separately; --force reparses existing details.
+doc3gpp listserv parse 3GPP_TSG_RAN_WG5 --date '>= 2026-10-01' --force
+
+# Parse one public message directly, including an unsynced list or message.
+doc3gpp listserv parse-item 'https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=' --force
+
+# Stored-only reads and search modes (FTS, semantic, hybrid, filter-only).
+doc3gpp listserv list
+doc3gpp listserv list --list-id '%RAN%' --tsg 'R%'
+doc3gpp listserv list --tsg 'R%' --format json
+doc3gpp listserv search --list-id 3GPP_TSG_RAN_WG5 --tdocs '%R1-2610793%' --format json
+doc3gpp listserv search --text 'handover' --semantic 'mobility procedure' --limit 10
+# Replace the placeholder with an exact URL from a search result.
+doc3gpp listserv show '<exact-url-from-search>' --format json
+
+# Inspect or rebuild one/both derived indexes from SQL-stored records.
+doc3gpp listserv index
+doc3gpp listserv index --rebuild-all --batch 100 --stale-only
+```
+
+`sync LIST_ID` and `parse LIST_ID` each require one exact ID. `--date` is
+repeatable and accepts `=`, `!=`, `<`, `<=`, `>`, and `>=` comparisons against
+the message's displayed calendar date. `--force` makes sync revisit selected
+archive pages regardless of stored coverage; on parse it reparses already
+parsed messages. Sync fetches listings only; parse is a separate operation over
+stored messages. Neither operation has an implicit read-time counterpart.
+Sync selects archive months intersecting the requested dates plus one neighboring
+month on each side; unusually dated messages on more distant pages can be missed.
+`--force` revisits selected pages but does not expand the date-based selection.
+
+`parse-item URL` accepts a public ETSI detail URL of the form
+`https://list.etsi.org/scripts/wa.exe?A2=<list_id>;<item_id>.<YYMM[A-E]>&S=`;
+the empty `&S=` suffix is optional. Quote the URL in a shell. It fetches and
+parses that message without syncing archive pages. Previously parsed details are
+skipped unless `--force` is supplied. A successful parse atomically registers an
+unknown list and stores the message and detail; failures do not create the list
+or replace a previously stored detail. Attachments are metadata only. Index
+failures are reported separately from source failures: committed source remains
+available and stale indexes can be rebuilt with `listserv index`.
+
+`listserv search` accepts `--date`, `--list-id`, `--from`, `--subject`,
+`--tdocs`, `--text`, `--semantic`, `--limit`, `--offset`, and
+`--format table|json`. `--text` selects FTS5, `--semantic` selects vector
+search, both select hybrid, and neither selects SQL filter-only search. Rich
+LIKE filters use the shared `%`/`_`, `!`, `null`, and `not-null` grammar.
+Stored TDoc ID fields are comma-delimited; use a contains pattern such as
+`%R1-2610793%` to match one ID within a multi-ID value.
+Unavailable FTS or semantic/vector dependencies return an actionable error,
+not an apparently successful empty result.
+
+`listserv index` accepts `--rebuild`, `--rebuild-embeddings`, `--rebuild-all`,
+`--batch`, `--resume`, `--stale-only`, and `--quiet`. Semantic rebuilding needs
+the `[semantic]` extra, SQLite vector support, and a configured embedding
+endpoint. It reads stored SQL content and does not fetch ETSI pages.
+
+Search JSON contains the message `url` and `tdocs`, nullable
+`content_truncated`, and a separate nullable `preview_truncated`; search
+content is a preview capped at 200 characters. `show` returns all stored
+content, not the original tail omitted by the configured storage cap. See
+[LISTSERV flows and limitations](processes.md#listserv-archive-flow) and the
+[HTTP/MCP contracts](web-server.md#listserv-archive-endpoints).

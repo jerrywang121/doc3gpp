@@ -114,7 +114,7 @@ def _seed_search_corpus(sqlite_env):
         connection.execute(
             text(
                 "INSERT INTO tsgs (tsg_name, short_name, description) "
-                "VALUES ('RAN WG1', 'RAN1', 'TSG RAN WG1')"
+                "VALUES ('RAN WG1 test fixture', 'RAN1', 'TSG RAN WG1')"
             )
         )
         connection.execute(
@@ -356,7 +356,7 @@ def test_large_parent_page_uses_bounded_sqlite_parameters(sqlite_env) -> None:
         connection.execute(
             text(
                 "INSERT INTO tsgs (tsg_name, short_name, description) "
-                "VALUES ('RAN WG1', 'RAN1', 'TSG RAN WG1')"
+                "VALUES ('RAN WG1 test fixture', 'RAN1', 'TSG RAN WG1')"
             )
         )
         connection.execute(

@@ -1,7 +1,7 @@
 {% if job %}
   <div class="job-status" id="job-{{ job.id }}">
     <p>
-      Job <code>{{ job.id }}</code> ·
+      Job <a href="/jobs/{{ job.id }}"><code>{{ job.id }}</code></a> ·
       <strong>{{ job.status.value }}</strong> ·
       kind <code>{{ job.kind.value }}</code>
     </p>
@@ -11,6 +11,33 @@
     </section>
     {% if job.error %}
       <p class="error">{{ job.error }}</p>
+    {% endif %}
+    {% if job.result_summary %}
+      <section class="card">
+        <h2>Result summary</h2>
+        {% if job.result_summary.message %}<p>{{ job.result_summary.message }}</p>{% endif %}
+        {% if job.result_summary.failures %}
+          <h3>Source failures</h3>
+          <ul>
+            {% for source, reason in job.result_summary.failures.items() %}
+              <li><code>{{ source }}</code>: {{ reason }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        {% if job.result_summary.index_failures %}
+          <h3>Derived-index failures</h3>
+          <p>Source data was committed; these derived indexes may need repair.</p>
+          <ul>
+            {% for source, reason in job.result_summary.index_failures.items() %}
+              <li><code>{{ source }}</code>: {{ reason }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        <details>
+          <summary>Full result summary</summary>
+          <pre><code>{{ job.result_summary | tojson(indent=2) }}</code></pre>
+        </details>
+      </section>
     {% endif %}
     {% if job.log_lines %}
       <ul class="job-log">

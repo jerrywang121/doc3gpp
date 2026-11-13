@@ -43,6 +43,40 @@ def test_upsert_many_inserts_and_updates() -> None:
     assert refreshed.url == "https://x/r1-v2"
 
 
+def test_upsert_by_name_can_change_code_when_no_code_conflict() -> None:
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    repo = SQLAlchemyTsgRepository()
+    repo._session_factory = sessionmaker(bind=engine)
+    repo.upsert_many([Tsg(tsg_name="Custom group", short_name="OLD", description="before")])
+    repo.upsert_many([Tsg(tsg_name="custom GROUP", short_name="NEW", description="after")])
+    assert repo.count() == 1
+    assert repo.get_by_short_name("OLD") is None
+    assert repo.get_by_short_name("NEW").description == "after"
+
+
+def test_upsert_rejects_name_and_code_identifying_different_rows_without_changes() -> None:
+    import pytest
+
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    repo = SQLAlchemyTsgRepository()
+    repo._session_factory = sessionmaker(bind=engine)
+    repo.upsert_many([
+        Tsg(tsg_name="Other group", short_name="C1", description="original"),
+        Tsg(tsg_name="My renamed group", short_name="R1", description="keep R1"),
+        Tsg(tsg_name="RAN WG1", short_name="RX", description="keep RX"),
+    ])
+    with pytest.raises(ValueError, match="conflicting TSG"):
+        repo.upsert_many([
+            Tsg(tsg_name="Other group", short_name="C1", description="changed"),
+            Tsg(tsg_name="RAN WG1", short_name="R1", description="conflict"),
+        ])
+    assert repo.get_by_short_name("C1").description == "original"
+    assert repo.get_by_short_name("R1").description == "keep R1"
+    assert repo.get_by_short_name("RX").description == "keep RX"
+
+
 def test_get_by_short_name_is_case_insensitive() -> None:
     engine = _make_engine()
     Base.metadata.create_all(engine)

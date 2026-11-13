@@ -545,14 +545,27 @@ def test_landing_json_payload(client: TestClient) -> None:
 def test_nav_order_home_tsgs_meetings_tdocs_specs_wis_search_jobs(
     client: TestClient,
 ) -> None:
-    """The header nav lists Home, TSGs, Meetings, TDocs, Specs, WIs, Search, Jobs, Sync."""
+    """The header nav includes LISTSERV alongside the other browser sections."""
     html = client.get("/").text
     nav = html.split('<nav class="topnav">')[1].split("</nav>")[0]
     hrefs = [line.split('href="')[1].split('"')[0] for line in nav.splitlines() if 'href="' in line]
     assert hrefs == [
         "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/testcases", "/wis",
-        "/tdocs/search", "/jobs", "/sync",
+        "/tdocs/search", "/listserv", "/jobs", "/sync",
     ]
+
+
+
+def test_listserv_browser_pages_are_documented() -> None:
+    from pathlib import Path
+
+    docs = (
+        Path(__file__).resolve().parents[2] / "docs" / "web-server.md"
+    ).read_text(encoding="utf-8")
+
+    assert "| `/listserv`" in docs
+    assert "`/listserv/show`" in docs
+    assert "existing LISTSERV endpoints and background jobs" in docs
 
 
 def test_nav_hides_jobs_badge_when_no_pending_jobs(client: TestClient) -> None:
@@ -2843,24 +2856,11 @@ def test_meeting_show_sync_form_mounts_job_poller(
     """
     from doc3gpp.models.meeting import Meeting
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.db.models import TsgORM
-    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.repositories.meeting_sql import (
         SQLAlchemyMeetingRepository,
     )
 
     create_schema()
-    factory = get_session_factory()
-    with factory() as session:
-        session.add(
-            TsgORM(
-                tsg_name="RAN WG5",
-                short_name="RAN5",
-                description="",
-                url=None,
-            )
-        )
-        session.commit()
     SQLAlchemyMeetingRepository().upsert_many(
         [
             Meeting(
@@ -2868,7 +2868,7 @@ def test_meeting_show_sync_form_mounts_job_poller(
                 name="RAN5#99-e",
                 title="RAN WG5 Meeting #99-e",
                 location="Athens, Greece",
-                tsg="RAN5",
+                tsg="R5",
             ),
         ],
     )
@@ -2898,24 +2898,11 @@ def test_meeting_show_sync_queued_hint_still_renders(
     """
     from doc3gpp.models.meeting import Meeting
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.db.models import TsgORM
-    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.repositories.meeting_sql import (
         SQLAlchemyMeetingRepository,
     )
 
     create_schema()
-    factory = get_session_factory()
-    with factory() as session:
-        session.add(
-            TsgORM(
-                tsg_name="RAN WG5",
-                short_name="RAN5",
-                description="",
-                url=None,
-            )
-        )
-        session.commit()
     SQLAlchemyMeetingRepository().upsert_many(
         [
             Meeting(
@@ -2923,7 +2910,7 @@ def test_meeting_show_sync_queued_hint_still_renders(
                 name="RAN5#99-e",
                 title="RAN WG5 Meeting #99-e",
                 location="Athens, Greece",
-                tsg="RAN5",
+                tsg="R5",
             ),
         ],
     )
@@ -5398,3 +5385,21 @@ def test_tdoc_content_error_mapping_uses_typed_reason_not_message(
         assert isinstance(mapped, CacheMissError)
         assert mapped.hint is not None
         assert ("--force" in mapped.hint) is force
+
+
+
+def test_generic_search_corruption_keeps_generic_http_hint() -> None:
+    import json
+
+    from doc3gpp.models.search import SearchIndexCorruptError
+    from doc3gpp.web.errors import map_domain_error
+
+    response = map_domain_error(SearchIndexCorruptError("broken generic index"))
+
+    assert response.status_code == 500
+    assert json.loads(response.body) == {
+        "error": "search_index_corrupt",
+        "detail": "broken generic index",
+        "resource": "search",
+        "hint": "run: doc3gpp spec doc index --rebuild",
+    }

@@ -307,9 +307,14 @@ Both unified search facades select the mode from the supplied inputs:
 | Absent | Absent | Source-SQL filters only / `null` score |
 
 Filters narrow the source corpus; rich filter syntax is covered in
-[conventions](conventions.md#filter-grammar). Candidate fanout compensates for
-deduplication and post-filtering but is bounded, not an unlimited exhaustive
-vector scan. Hybrid weighting is configured, not supplied per request.
+[conventions](conventions.md#filter-grammar). For TDoc semantic search,
+candidate fanout compensates for deduplication and post-filtering but is bounded,
+not an unlimited exhaustive vector scan. LISTSERV semantic/hybrid search keeps
+vec0 KNN as its ordinary fast path and uses exact filtered cosine scoring when a
+deep or chunk-crowded candidate window would otherwise be incomplete. That
+fallback can score and order much of the eligible vector corpus; arbitrary
+nonnegative offsets remain supported. Hybrid weighting is configured, not
+supplied per request.
 
 Public rows are flattened, in final rank order, with `search_mode`, `score`, and
 FTS-only `previews`. TDoc rows always include `matched_documents` (possibly
@@ -342,10 +347,15 @@ the row-building/rendering contracts.
 | Spec follow-up executor | Independent optional HTTP follow-ups |
 
 The web lifespan owns a shared runtime/conversion pool and a lazily created
-shared embedder. CLI operations own their invocation-scoped resources. Queued
-TDoc parse, direct-URL parse, and spec-document parse use the shared
-preparation/persistence runtime. This does **not** serialize every database write
-in the application: other sync/index/job/log operations have separate boundaries.
+shared embedder. LISTSERV search/index facades and worker-built sync/parse
+services borrow that provider; per-job services close their owned source/index
+on the worker thread, while app shutdown closes its LISTSERV facades after job
+drain and before the shared embedder. Standalone service and CLI builders close
+only resources they create. CLI operations otherwise own their
+invocation-scoped resources. Queued TDoc parse, direct-URL parse, and
+spec-document parse use the shared preparation/persistence runtime. This does
+**not** serialize every database write in the application: other sync/index/job/log
+operations have separate boundaries.
 
 TDoc pipeline output is deterministic in discovery order; progress reflects
 completion. Do not infer commit order from output order. Bounded permits apply
@@ -372,8 +382,9 @@ Queued cancellation is persisted immediately. Running cancellation is
 cooperative: it stops new work and discards preparation that has not entered
 persistence where supported, but does not kill a running conversion/thread or
 roll back already submitted/committed writes. Shutdown signals cancellation,
-drains handlers/pipeline work, then closes conversion/embedding resources and
-disposes engines. Cancelling an already-terminal job returns its envelope.
+drains handlers/pipeline work, closes the conversion pool and LISTSERV facades,
+then closes the shared embedder and disposes engines. Cancelling an
+already-terminal job returns its envelope.
 
 At startup, stale `running` jobs are failed as `orphaned_after_restart`, not
 resumed. Retention cleanup deletes old terminal job rows and their SQL logs;
@@ -400,3 +411,241 @@ After content is present, rebuild text indexes for newly supported content and
 embeddings for updated vector provenance as needed. `db reset` is destructive
 and is not the normal upgrade/backfill path. See
 [known constraints](known-constraints.md) before deployment or recovery.
+
+## LISTSERV archive flow
+
+### Public sync and date coverage
+
+LISTSERV sync uses the exact supplied list ID to discover public archive pages
+from `https://list.etsi.org/scripts/wa.exe?A0=...`. Only HTTPS requests to the
+intended public LISTSERV host are followed, including redirects and embedded
+body URLs. Authentication-required/private archives and arbitrary external
+hosts are rejected; there is no attachment download path. The public RAN5 list
+`3GPP_TSG_RAN_WG5` is one example, not an allowlist.
+
+Sync stores message listing metadata, not message bodies. With no date filters,
+it selects the rolling preceding calendar year through today, inclusive (the
+anniversary date clamps February 29 to February 28 in non-leap years). Repeatable
+`--date` comparisons (`=`, `!=`, `<`, `<=`, `>`, `>=`) intersect. They compare
+the message's displayed calendar date, not a UTC-converted date. The returned
+ISO-8601 datetime retains the source's displayed time and offset; naive and
+date-only values remain distinguishable through `date_precision`. A date-only
+value uses midnight as a placeholder. Aware times sort by instant, with a
+wall-clock fallback for unknown zones; ordering involving unknown-zone or
+day-only values is approximate.
+
+Sync selects A1 listings from the A0 index by month: it fetches the months
+intersecting each requested date interval, plus one neighboring month on each
+side for messages whose displayed dates cross a month boundary. It then applies
+the exact date predicate to each message. This bounded scan can miss messages
+whose displayed dates differ from their archive-page month by more than one
+month; even `--force` does not expand the selected months. To retrieve such a
+message, sync a date range that also includes its archive-page month.
+
+Coverage belongs to the actual archive-page URL, not its week/month label:
+ETSI may split one week across multiple pages. For a cataloged list, successful
+empty pages are covered; unrecognized or failed pages remain retryable. Among
+selected pages, historical pages are skipped when recorded successful coverage
+includes the requested date predicate. The newest upstream period (week, or a
+month-only latest label), if selected, is revisited each sync; `--force` revisits
+every selected page. Page messages, pagination links, and coverage commit
+atomically, so a failed page does not imply coverage. The processed and skipped
+counts refer to selected pages; out-of-range A1 pages are not counted.
+
+### Catalog discovery and legacy databases
+
+The main database has a LISTSERV catalog populated with reference entries during
+main-schema initialization. Initialization is repeatable and inserts missing
+rows without overwriting locally maintained TSG or description metadata. A
+previously unknown ID discovered by sync is registered only when a successfully
+parsed archive page contains at least one message matching the requested date
+filters. For that
+unknown list, successful zero-match pages and their pagination links are held in
+memory while sync follows the links. Once a matching page registers the list,
+the buffered pages are committed; each page's messages, coverage, and next links
+remain atomic. If sync ends or is cancelled before a matching page commits, the
+buffers are discarded and no list or coverage is persisted, so those pages can
+be fetched again. A recognized TSG code is used only when it exists in the
+TSG table; otherwise discovered TSG metadata and all new descriptions are null.
+Existing catalog metadata is never recomputed during discovery.
+Explicit single-item parsing has a separate discovery rule: a previously unknown
+list is registered only when that message and its detail commit successfully.
+
+Main-schema initialization also performs a targeted upgrade for legacy SQLite
+databases: IDs found in old message or archive-page rows are backfilled into the
+catalog with null metadata, and the required foreign keys are established while
+preserving supported data and indexes. This is LISTSERV-specific compatibility
+logic, not a general migration framework. Unsupported legacy table shapes or
+non-SQLite legacy schemas without the required constraints fail explicitly
+rather than being reported as upgraded; `create_all` alone cannot add foreign
+keys to existing SQLite tables.
+
+SQLite must restore foreign-key enforcement after committing the upgrade. If
+that or another post-commit connection cleanup fails, initialization raises
+`ListservCatalogUpgradeCommittedError`: the catalog upgrade is already durable,
+and the affected connection is discarded. The rest of schema initialization may
+not have run; retry initialization after resolving the cleanup failure. Failures
+before commit roll back the upgrade instead.
+
+The SDK uses the same service contracts without the web job queue:
+
+```python
+from doc3gpp.models.listserv import ListservFilters, parse_date_set
+from doc3gpp.services.factory import (
+    build_listserv_parse_service,
+    build_listserv_search_service,
+    build_listserv_service,
+    build_listserv_sync_service,
+)
+
+sync_service = build_listserv_sync_service()
+try:
+    sync_result = sync_service.sync(
+        "3GPP_TSG_RAN_WG5", dates=[">= 2026-10-01", "<= 2026-10-31"]
+    )
+finally:
+    sync_service.close()
+
+parse_service = build_listserv_parse_service()
+try:
+    parse_result = parse_service.parse("3GPP_TSG_RAN_WG5")
+    item_result = parse_service.parse_item(
+        "https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=",
+        force=True,
+    )
+finally:
+    parse_service.close()
+
+listserv_service = build_listserv_service()
+catalog = listserv_service.list_lists()  # ordered list_id, TSG, and description records
+list_ids = listserv_service.list_ids()  # compatibility IDs from the same catalog
+search_service = build_listserv_search_service()
+try:
+    hits = search_service.search(
+        text="handover",
+        filters=ListservFilters(
+            list_id="3GPP_TSG_RAN_WG5",
+            dates=parse_date_set([">= 2026-10-01", "<= 2026-10-31"]),
+            limit=10,
+        ),
+    )
+finally:
+    search_service.close()
+
+if hits:
+    record = listserv_service.show(hits[0].record.message.url)
+```
+
+The example uses a public RAN5 list, not an allowlist; `show` uses an exact URL
+returned by search. Sync and parse
+builders own their source and should be closed when finished; list/show/search
+builders are SQL-backed reads. Close the search service when finished to release
+any lazily created semantic service it owns.
+
+### Separate parse and bounded message detail
+
+`doc3gpp listserv parse LIST_ID` operates on already-synced records and does not
+run sync. It skips parsed details unless forced. LISTSERV detail pages may embed
+the message body in an HTML or plain-text iframe; that body representation is
+fetched and parsed, but named attachments are metadata only and their bytes are
+never fetched. `multipart/related` and text alternatives are body
+representations, not downloadable attachments.
+
+`doc3gpp listserv parse-item URL` explicitly fetches one public detail page,
+without an earlier sync or an archive-page scan. Its accepted form is
+`https://list.etsi.org/scripts/wa.exe?A2=<list_id>;<item_id>.<YYMM[A-E]>&S=`;
+the empty `&S=` is optional. Both variants identify the same item, and existing
+stored URL keys are retained when a later parse or sync encounters an alias.
+For a new message, subject, sender, and displayed date come from its detail
+page; its week follows the displayed date rather than the URL's archive group.
+An unambiguous valid header and successful body parsing are required. The list,
+message, and detail commit atomically, without creating archive-page coverage;
+failures leave previously stored data unchanged. Existing message and catalog
+metadata are not overwritten by this operation. Already parsed details are
+skipped unless forced. The ordinary index hooks run after the source commit, so
+an index error leaves the new source available for a later index rebuild.
+
+The parser removes recognizable quoted-reply/forward sections conservatively,
+using structural HTML quote boundaries, plain-text delimiters, and groups of
+reply headers, including bold labels rendered from HTML and headers separated by
+blank lines. If a boundary is uncertain it favors retaining the current body
+rather than cutting arbitrary prose. Email quoting is not standardized, so quote
+removal is best-effort, not a guarantee for every message format. Unsafe
+embedded HTML is excluded from stored Markdown. Parser improvements apply on
+subsequent parses; force-reparse already stored messages to update them.
+
+Before applying `[listserv].max_content_chars` (10,000 Unicode characters by
+default), parsing extracts unique case-insensitive TDoc IDs from the current
+message body, subject, and attachment names/URLs. Recognizable quoted prior
+messages are excluded. Thus IDs after the storage boundary can remain in
+metadata, but body text after that boundary is not retained or searchable.
+Changing the setting affects subsequent parses; force-reparse to replace an
+existing detail. Each parsed detail is atomically replaced; a failed parse or
+forced reparse leaves its prior good detail intact. A parsed-empty message has
+`content=""`; an unparsed message has `content=null`.
+
+### Stored reads, search, and indexes
+
+`listserv list`, search, show, and index status/rebuild read stored SQL and do
+not fetch or parse upstream pages. `listserv list` reads the catalog, including
+pre-seeded entries and discovered or legacy-backfilled IDs that have no stored
+messages. The service returns immutable `ListservList` records with `list_id`,
+`tsg`, and `description`, ordered by ID; `list_ids()` remains a compatibility
+view of those catalog IDs. Show requires the exact detail URL and returns the
+full **stored** body only; it cannot recover truncated text.
+Optional catalog list-ID and TSG rich LIKE filters intersect in SQL; the HTTP
+and MCP `lists` and compatibility `list_ids` arrays describe the same filtered
+records. The portal's catalog filters are independent of message search, and its
+suggestions remain unfiltered.
+
+Search modes match the shared facades: `text` uses FTS5, `semantic` uses vector
+search, both use hybrid RRF, and neither uses source-SQL filters only. The
+filters for list ID, sender, subject, TDocs, and displayed dates apply in each
+mode. Listing metadata and TDoc IDs extracted from subjects are searchable
+before parsing; body and attachment IDs require parsing. Index input
+includes stored message metadata, attachment names, IDs, and the bounded stored
+body, but strips message/attachment URL strings from both FTS and embeddings
+(URLs remain in output metadata). A TDoc ID extracted from an attachment URL is
+retained as an ID field. Filter-only search needs neither index. Scores are
+mode-specific; filter-only results have no score.
+
+Search's `content_preview` is at most 200 characters. `content_truncated` marks
+the original-to-storage cut; nullable `preview_truncated` marks the
+storage-to-preview cut. Both flags are null for unparsed content. `show` and
+search share `url` and effective `tdocs`; search never exposes full body content.
+Filter-only results sort by newest message datetime. Ranked results sort by
+relevance, then newest datetime, with URL as the deterministic final tie-break.
+For unknown-zone or date-only records, newest-first order remains a documented
+approximation.
+
+FTS and vector indexes have independent freshness and rebuild state derived from
+source revisions. Sync resolves each parsed page's duplicate message URLs to
+their final occurrence before applying the requested displayed-local-date
+filter; an earlier in-range duplicate cannot override a final out-of-range row.
+Within the archive-page transaction, duplicate URLs are independently resolved
+to their final occurrence before change detection; an existing source revision
+advances at most once and only when that final message metadata differs from
+stored metadata. Automatic updates follow the four `[listserv]`
+hooks and the global search/semantic availability settings. A failed derived
+update does not roll back committed source data and leaves the component stale
+for rebuild.
+Rebuild uses SQL-stored data, not ETSI; check `doc3gpp listserv index` and use
+`--rebuild`, `--rebuild-embeddings`, or `--rebuild-all` as appropriate. Vector
+support is optional; FTS/filter-only paths are independent of it.
+
+### Background jobs and shutdown
+
+HTTP, UI, and both MCP transports enqueue LISTSERV sync, parse, parse-item, and
+index jobs through the existing single-process worker. Job kinds are
+`listserv_sync`, `listserv_parse`, `listserv_parse_item`, and `listserv_index`;
+statuses follow `queued`, `running`,
+`succeeded`, `failed`, or `cancelled`. Sync/parse summaries report `processed`,
+`skipped`, source `failed`/`failures`, derived `index_failed`/`index_failures`,
+and `message`. A job with source or index failures is `failed`; an index failure
+does not undo source writes. Cancellation is cooperative: in-flight requests and
+committed rows may finish and are not rolled back. Blocking handler work uses
+the shared `_to_thread` path. Worker-built LISTSERV services close their owned
+source/index wrappers on that worker thread, not the app embedder they borrow.
+MCP stdio drains in-flight LISTSERV work and its worker executor, then closes
+app LISTSERV facades before the shared embedder; see
+[shutdown constraints](known-constraints.md#pools-jobs-and-deployment).

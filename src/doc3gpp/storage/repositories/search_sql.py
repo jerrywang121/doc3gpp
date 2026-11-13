@@ -150,6 +150,8 @@ WITH document_sources AS (
     SELECT tdoc_id, row_kind, document_id, source_file, content_hash,
            CAST(extraction_version AS INTEGER) AS extraction_version
     FROM tdoc_search
+    -- Prevent flattening into repeated FTS scans without limiting rows.
+    LIMIT -1 OFFSET 0
 ), indexed_documents AS (
     SELECT tdoc_id, row_kind, document_id, source_file, content_hash,
            extraction_version

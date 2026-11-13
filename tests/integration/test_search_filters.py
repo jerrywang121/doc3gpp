@@ -20,7 +20,7 @@ def _seed_minimal_db(title: str = "RAN1#1") -> None:
         conn.execute(
             text(
                 "INSERT INTO tsgs (tsg_name, short_name, description) "
-                "VALUES ('RAN WG1', 'RAN1', 'TSG RAN WG1')"
+                "VALUES ('RAN WG1 test fixture', 'RAN1', 'TSG RAN WG1')"
             )
         )
         conn.execute(

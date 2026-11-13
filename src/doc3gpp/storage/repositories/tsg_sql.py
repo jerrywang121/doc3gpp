@@ -20,10 +20,10 @@ class SQLAlchemyTsgRepository:
         self._session_factory = get_session_factory()
 
     def upsert_many(self, tsgs: list[Tsg]) -> int:
-        """Insert or update multiple TSG records keyed by ``tsg_name``.
+        """Insert or update TSG records by short code or case-insensitive name.
 
-        Existing records (matched by ``tsg_name``, case-insensitive) are updated
-        in place so callers can use this method to refresh descriptions or URLs.
+        Existing records are updated in place so callers can refresh metadata.
+        A code and name identifying different records are rejected.
         ``meeting_last_sync`` is intentionally preserved on update; it is
         managed exclusively by :meth:`update_meeting_last_sync`.
         """
@@ -32,7 +32,19 @@ class SQLAlchemyTsgRepository:
                 stmt = select(TsgORM).where(
                     func.lower(TsgORM.tsg_name) == item.tsg_name.lower()
                 )
-                existing = session.scalar(stmt)
+                name_matches = session.scalars(stmt).all()
+                if len(name_matches) > 1:
+                    raise ValueError(
+                        f"conflicting TSG identity: {item.tsg_name!r} matches multiple rows"
+                    )
+                by_name = name_matches[0] if name_matches else None
+                by_code = session.get(TsgORM, item.short_name)
+                if by_name is not None and by_code is not None and by_name is not by_code:
+                    raise ValueError(
+                        f"conflicting TSG identity: {item.tsg_name!r} and "
+                        f"{item.short_name!r} identify different rows"
+                    )
+                existing = by_code if by_code is not None else by_name
                 if existing is not None:
                     existing.tsg_name = item.tsg_name
                     existing.short_name = item.short_name

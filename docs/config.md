@@ -304,3 +304,38 @@ service after changing `PATH`. Legacy conversion uses isolated temporary
 directories/profiles and the configured timeout; no Office automation server or
 persistent conversion daemon is required. Native `.docx`/`.pptx` conversion does
 not require LibreOffice. See [extraction limits](known-constraints.md#extraction-and-content).
+
+## LISTSERV archives
+
+Under `[listserv]`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_content_chars` | `10000` | Unicode-character cap for each subsequently parsed message body; minimum `1` |
+| `auto_index_on_sync` | `true` | Update FTS5 after committed listing changes |
+| `auto_index_on_parse` | `true` | Update FTS5 after committed detail changes |
+| `auto_embed_on_sync` | `true` | Update vectors after committed listing changes |
+| `auto_embed_on_parse` | `true` | Update vectors after committed detail changes |
+
+```toml
+[listserv]
+max_content_chars = 10000
+auto_index_on_sync = true
+auto_index_on_parse = true
+auto_embed_on_sync = true
+auto_embed_on_parse = true
+```
+
+The 10,000-character default limits the body persisted by a new parse; changing
+it does not rewrite existing rows. Run `doc3gpp listserv parse LIST_ID --force`
+to apply the current limit to already parsed messages. Search returns a distinct
+200-character preview. `content_truncated` reports the source-to-storage cut;
+`preview_truncated` reports the storage-to-search-preview cut. Both are `null`
+when no detail has been parsed.
+
+Automatic FTS hooks additionally require `[search].enabled`; automatic vector
+hooks require `[semantic_search].enabled`, the optional `[semantic]` dependency,
+SQLite vector support, and a configured embedding endpoint. The four policy
+flags independently control sync/parse and FTS/vector updates. See
+[LISTSERV indexing and recovery](processes.md#listserv-archive-flow) and
+[optional dependencies](#optional-dependencies).

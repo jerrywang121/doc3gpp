@@ -40,17 +40,37 @@ class _FakeTsgRepository:
         return len(self.rows)
 
 
-def test_seed_defaults_populates_all_nineteen() -> None:
+def test_seed_defaults_populates_all_twenty() -> None:
     repo = _FakeTsgRepository()
     service = TsgService(repo)  # type: ignore[arg-type]
 
     seeded = service.seed_defaults()
-    assert seeded == 19
-    assert repo.count() == 19
+    assert seeded == 20
+    assert repo.count() == 20
     short_names = {t.short_name for t in service.list_all()}
-    assert short_names == {"R1", "R2", "R3", "R4", "R5", "RT", "S1", "S2", "S3",
-                           "S4", "S5", "S6", "C1", "C3", "C4", "C6",
-                           "RP", "SP", "CP"}
+    assert short_names == {
+        "R1", "R2", "R3", "R4", "R5", "R6", "RT", "S1", "S2", "S3",
+        "S4", "S5", "S6", "C1", "C3", "C4", "C6", "RP", "SP", "CP",
+    }
+
+
+def test_default_tsgs_includes_r6_with_null_url() -> None:
+    from doc3gpp.models.tsg_defaults import default_tsgs
+
+    tsgs = default_tsgs()
+    assert isinstance(tsgs, tuple)
+    assert len(tsgs) == 20
+    r1 = next(tsg for tsg in tsgs if tsg.short_name == "R1")
+    r6 = next(tsg for tsg in tsgs if tsg.short_name == "R6")
+    assert r1.url == (
+        "https://www.3gpp.org/3gpp-groups/radio-access-networks-ran/ran-wg1"
+    )
+    assert (r6.tsg_name, r6.short_name, r6.description, r6.url) == (
+        "RAN WG6",
+        "R6",
+        "(CLOSED) GSM/EDGE Radio Access Network (GERAN) and UMTS Radio Access (UTRA)",
+        None,
+    )
 
 
 def test_seed_defaults_assigns_urls_from_pattern() -> None:
@@ -119,7 +139,7 @@ def test_seed_defaults_is_idempotent() -> None:
 
     service.seed_defaults()
     service.seed_defaults()
-    assert repo.count() == 19
+    assert repo.count() == 20
 
 
 def test_seed_defaults_refreshes_url_from_pattern() -> None:

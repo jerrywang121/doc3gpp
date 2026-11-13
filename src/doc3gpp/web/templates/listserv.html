@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · LISTSERV archives{% endblock %}
+{% block content %}
+  <h1>LISTSERV archives</h1>
+  <p class="lead">Browse stored public ETSI LISTSERV messages. Reads never sync or parse archive content.</p>
+
+  <section class="card">
+    <h2>Index status</h2>
+    {% for component_name in ("fts5", "vector") %}
+      {% set component = index_status[component_name] %}
+      <p>
+        {{ component_name|upper }}:
+        {% if component.available %}
+          available{% if component.status %}, {{ component.status.row_count }} rows{% endif %}
+          {% if component.status and component.status.is_stale %} · stale{% endif %}
+        {% else %}
+          unavailable{% if component.error %} · {{ component.error }}{% endif %}
+        {% endif %}
+      </p>
+    {% endfor %}
+  </section>
+
+  <datalist id="listserv-list-id-suggestions">
+    {% for list_id in list_ids %}<option value="{{ list_id }}">{% endfor %}
+  </datalist>
+
+  <details class="card" id="listserv-catalog"{% if catalog_filters.list_id or catalog_filters.tsg %} open{% endif %}>
+    <summary>List catalog</summary>
+    <form method="get" action="/listserv" class="filters">
+      <label>List ID filter
+        <input name="catalog_list_id" value="{{ catalog_filters.list_id or '' }}" placeholder="All lists or a rich filter">
+      </label>
+      <label>TSG filter <input name="catalog_tsg" value="{{ catalog_filters.tsg or '' }}"></label>
+      {% for name in ("list_id", "sender", "subject", "tdocs") %}
+        {% if filters[name] is not none %}<input type="hidden" name="{{ name }}" value="{{ filters[name] }}">{% endif %}
+      {% endfor %}
+      {% for value in date_filters %}<input type="hidden" name="date" value="{{ value }}">{% endfor %}
+      {% if text %}<input type="hidden" name="text" value="{{ text }}">{% endif %}
+      {% if semantic %}<input type="hidden" name="semantic" value="{{ semantic }}">{% endif %}
+      <input type="hidden" name="limit" value="{{ limit }}">
+      <input type="hidden" name="offset" value="{{ offset }}">
+      <button type="submit" class="btn primary">Filter lists</button>
+    </form>
+    {% if catalog_entries %}
+      <ul class="listserv-catalog-list">
+        {% for entry in catalog_entries %}
+          <li>{% if entry.url %}<a href="{{ entry.url }}">{{ entry.item.list_id }}</a>{% else %}{{ entry.item.list_id }}{% endif %}{% if entry.item.tsg %} · {{ entry.item.tsg }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+    {% else %}<p>No stored lists match these filters.</p>{% endif %}
+  </details>
+
+  <section class="card">
+    <h2>Search stored messages</h2>
+    <form method="get" action="/listserv" class="filters">
+      {% if catalog_filters.list_id is not none %}<input type="hidden" name="catalog_list_id" value="{{ catalog_filters.list_id }}">{% endif %}
+      {% if catalog_filters.tsg is not none %}<input type="hidden" name="catalog_tsg" value="{{ catalog_filters.tsg }}">{% endif %}
+      <label>List ID filter
+        <input type="text" name="list_id" list="listserv-list-id-suggestions"
+               value="{{ filters.list_id or '' }}" placeholder="All lists or a rich filter">
+      </label>
+      <label>Sender <input name="sender" value="{{ filters.sender or '' }}"></label>
+      <label>Subject <input name="subject" value="{{ filters.subject or '' }}"></label>
+      <label>TDoc IDs <input name="tdocs" value="{{ filters.tdocs or '' }}"></label>
+      <label>Date expression <input name="date" value="{{ date_filters|join(', ') }}" placeholder=">= 2026-10-01"></label>
+      <label>Text search <input name="text" value="{{ text or '' }}"></label>
+      <label>Semantic search <input name="semantic" value="{{ semantic or '' }}"></label>
+      <label>Page size <input type="number" name="limit" min="1" max="150" value="{{ limit }}"></label>
+      <button type="submit" class="btn primary">Search</button>
+    </form>
+    {% include "partials/listserv_results.html" %}
+  </section>
+
+  <section class="card">
+    <h2>Sync a list</h2>
+    <p>Sync fetches public archive listings for exactly one list ID.</p>
+    <form id="listserv-sync-form" class="sync-form" method="post" action="/api/listserv/sync">
+      <label>List ID
+        <input type="text" name="list_id" list="listserv-list-id-suggestions"
+               value="{{ list_ids[0] if list_ids else '' }}" required>
+      </label>
+      <label>Since
+        <input type="text" name="since" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Until
+        <input type="text" name="until" placeholder="YYYY-MM-DD">
+      </label>
+      <label class="inline-check"><input type="checkbox" name="force"> Force sync</label>
+      <button type="submit" class="btn primary">Queue sync</button>
+      <span class="sync-queued" data-label="Sync job queued" style="display:none">Sync job queued</span>
+      <div id="listserv-sync-form-job-target"></div>
+      <p><a href="/jobs">View jobs</a></p>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Parse stored messages</h2>
+    <p>Parse reads messages already stored locally; it does not sync the archive.</p>
+    <form id="listserv-parse-form" class="sync-form" method="post" action="/api/listserv/parse">
+      <label>List ID
+        <input type="text" name="list_id" list="listserv-list-id-suggestions"
+               value="{{ list_ids[0] if list_ids else '' }}" required>
+      </label>
+      <label>Since
+        <input type="text" name="since" placeholder="YYYY-MM-DD">
+      </label>
+      <label>Until
+        <input type="text" name="until" placeholder="YYYY-MM-DD">
+      </label>
+      <label class="inline-check"><input type="checkbox" name="force"> Force parse</label>
+      <button type="submit" class="btn primary">Queue parse</button>
+      <span class="sync-queued" data-label="Parse job queued" style="display:none">Parse job queued</span>
+      <div id="listserv-parse-form-job-target"></div>
+      <p><a href="/jobs">View jobs</a></p>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Parse one email</h2>
+    <p>Fetch one public email URL, including messages not yet synced.</p>
+    <form id="listserv-parse-item-form" class="sync-form" method="post" action="/api/listserv/parse-item">
+      <label>Email item URL <input type="url" name="url" required placeholder="https://list.etsi.org/scripts/wa.exe?A2=LIST;item.2611B&amp;S="></label>
+      <label class="inline-check"><input type="checkbox" name="force"> Force parse</label>
+      <button type="submit" class="btn primary">Queue item parse</button>
+      <span class="sync-queued" data-label="Item parse job queued" style="display:none">Item parse job queued</span>
+      <div id="listserv-parse-item-form-job-target"></div>
+      <p><a href="/jobs">View jobs</a></p>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Rebuild indexes</h2>
+    <form id="listserv-index-form" class="sync-form" method="post" action="/api/listserv/index">
+      <label class="inline-check"><input type="checkbox" name="rebuild"> Rebuild FTS5</label>
+      <label class="inline-check"><input type="checkbox" name="rebuild_embeddings"> Rebuild vector index</label>
+      <label class="inline-check"><input type="checkbox" name="rebuild_all"> Rebuild all</label>
+      <label class="inline-check"><input type="checkbox" name="resume"> Resume</label>
+      <label class="inline-check"><input type="checkbox" name="stale_only"> Stale only</label>
+      <label>Batch size <input type="number" name="batch" min="1"></label>
+      <button type="submit" class="btn primary">Queue index rebuild</button>
+      <span class="sync-queued" data-label="Index job queued" style="display:none">Index job queued</span>
+      <div id="listserv-index-form-job-target"></div>
+      <p><a href="/jobs">View jobs</a></p>
+    </form>
+  </section>
+
+  <script src="/static/js/job_poller.js" defer></script>
+  <script src="/static/js/listserv.js" defer></script>
+{% endblock %}

@@ -34,6 +34,7 @@ from doc3gpp.models.jobs import Job, JobKind, JobStatus
 from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.web.state import WebState
 from doc3gpp.web.workers.handlers import Handler, JobHandlers
+from doc3gpp.web.workers.listserv_jobs import failure_error
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +330,23 @@ class JobWorker:
                     item_type = "TDocs" if job.kind is JobKind.PARSE_TDOCS else "spec docs"
                     logger.info("job %s failed (all %s failed)", job.id, item_type)
                     return
+                if job.kind in (JobKind.LISTSERV_SYNC, JobKind.LISTSERV_PARSE, JobKind.LISTSERV_PARSE_ITEM):
+                    error = failure_error(summary)
+                    if error is not None:
+                        self._enqueue(
+                            queue,
+                            {
+                                "event": "status",
+                                "data": {
+                                    "status": JobStatus.FAILED.value,
+                                    "error": error,
+                                    "summary": dict(summary),
+                                },
+                            },
+                        )
+                        self._repo.mark_failed(job.id, error=error, summary=dict(summary))
+                        logger.info("job %s failed (LISTSERV partial failures)", job.id)
+                        return
                 self._enqueue(
                     queue,
                     {

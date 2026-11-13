@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -689,3 +690,80 @@ class SpecDocPresentationORM(SpecDataBase):
     source_file: Mapped[str] = mapped_column(String(256), primary_key=True)
     file_order: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+
+class ListservListORM(Base):
+    """Reference catalog entry for a known ETSI LISTSERV mailing list."""
+
+    __tablename__ = "listserv_list"
+
+    list_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tsg: Mapped[str | None] = mapped_column(
+        String(16), ForeignKey("tsgs.short_name"), nullable=True
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ListservMessageORM(Base):
+    """Persisted ETSI LISTSERV message listing row keyed by canonical detail URL."""
+
+    __tablename__ = "listserv_messages"
+
+    url: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    list_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("listserv_list.list_id"),
+        nullable=False,
+        index=True,
+    )
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    sender: Mapped[str] = mapped_column(Text, nullable=False)
+    local_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    local_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    tz_offset_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    date_precision: Mapped[str] = mapped_column(String(16), nullable=False)
+    sort_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    week: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_tdocs: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+
+    __table_args__ = (
+        Index("idx_listserv_messages_list_sort", "list_id", "sort_timestamp"),
+        Index("idx_listserv_messages_sort_url", "sort_timestamp", "url"),
+    )
+
+
+class ListservDetailORM(Base):
+    """Persisted ETSI LISTSERV parsed message detail row linked to ``listserv_messages``."""
+
+    __tablename__ = "listserv_details"
+
+    url: Mapped[str] = mapped_column(
+        String(1024),
+        ForeignKey("listserv_messages.url", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    attachments: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    tdocs: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    content: Mapped[bytes] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024), nullable=False
+    )
+    content_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    parser_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    parsed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ListservArchivePageORM(Base):
+    """Persisted ETSI LISTSERV archive page coverage and pagination URLs."""
+
+    __tablename__ = "listserv_archive_pages"
+
+    list_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("listserv_list.list_id"), primary_key=True
+    )
+    page_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    period: Mapped[str] = mapped_column(String(32), nullable=False)
+    coverage: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    next_urls: Mapped[str] = mapped_column(Text, nullable=False, default="[]")

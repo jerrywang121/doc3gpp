@@ -66,12 +66,16 @@ Provide external log rotation if required.
 | `/tsgs`, `/wis`, `/specs`, `/testcases` | Reference/corpus lists and available detail pages |
 | `/sync` | Forms to enqueue sync, parse, index, and cache work |
 | `/jobs` | Queue, progress, summaries, logs, cancellation |
+| `/listserv`, `/listserv/show` | Search stored public LISTSERV messages; forms use existing LISTSERV endpoints and background jobs |
 
 List/search filter forms use HTMX fragments when `HX-Request: true`; normal
 navigation receives complete pages. Explicit `format=json` selects JSON on
 routes that expose it. Raw upstream strings and inventory filenames are
 autoescaped; Markdown rendering disables raw HTML. Source paths are encoded
 in links rather than treated as filesystem paths.
+
+`/listserv/show` uses the exact `url` query value. Opening LISTSERV pages does
+not sync archives or parse messages.
 
 ### TDoc pages
 
@@ -214,3 +218,107 @@ server logs to investigate without exposing internal exception details.
 | MCP connection problem | Use [MCP troubleshooting](mcp.md#troubleshooting) |
 
 Further deployment and storage caveats are in [known constraints](known-constraints.md).
+
+## LISTSERV archive endpoints
+
+These routes are mounted under `/api/listserv`. Reads use stored SQL and shared
+SDK payload serializers; they do not sync, parse, or fetch ETSI content.
+
+| Method and path | Inputs / response |
+| --- | --- |
+| `GET /api/listserv/lists` | Optional rich-LIKE `list_id`, `tsg` query filters; `{"list_ids":[...],"lists":[{"list_id":"...","tsg":null,"description":null}]}`; ordered catalog entries, including lists without messages |
+| `GET /api/listserv/search` | Query: repeatable `date`; `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit` (default 20, 0–150), `offset` (default 0); response is a bare array of search payloads |
+| `GET /api/listserv/show?url=...` | Required exact stored message detail URL; response is the full stored-record payload |
+| `GET /api/listserv/index/status` | Independent FTS/vector `IndexStatus` JSON; no upstream request |
+| `POST /api/listserv/sync` | JSON `{"list_id":"3GPP_TSG_RAN_WG5","dates":[">= 2026-10-01"],"force":false}` |
+| `POST /api/listserv/parse` | Same JSON fields; parse operates on already-synced messages |
+| `POST /api/listserv/parse-item` | JSON `{"url":"https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=","force":false}`; parses one item, even if unsynced |
+| `POST /api/listserv/index` | `rebuild`, `rebuild_embeddings`, `rebuild_all`, optional positive `batch`, `resume`, `stale_only` |
+
+The example ID is the public RAN5 list; any valid public LISTSERV list ID can be
+supplied. `dates` is a list of displayed-calendar-date comparisons; sync and
+parse require one exact list ID. Accepted mutations return HTTP 202 with a
+queued job envelope. Their job kinds are `listserv_sync`, `listserv_parse`,
+`listserv_parse_item`, and `listserv_index`. The general
+[monitor/cancel API](#monitor-and-cancel) applies.
+For `tdocs`, stored IDs are comma-delimited; use a contains pattern such as
+`%R1-2610793%` to match one ID within a multi-ID value.
+
+The list response reads the main-database catalog and uses the same serializer
+as MCP. `lists` is ordered by `list_id`; each record has `list_id`, nullable
+`tsg`, and nullable `description` fields, with nulls represented as JSON `null`.
+The parallel `list_ids` array is retained for existing clients and for the
+`/listserv` selector. The catalog contains seeded references and discovered or
+legacy-backfilled IDs, even when no messages are stored.
+The optional `list_id` and `tsg` filters intersect and use the shared rich LIKE
+grammar (`%`, `_`, leading `!`, `null`, `not-null`); both arrays reflect the
+same filtered records.
+
+Sync/parse/parse-item job results include `list_id`, `processed`, `skipped`, `failed`,
+`index_failed`, `failures`, `index_failures`, and `message`. Source failures
+and derived-index failures stay distinct. Either makes the job `failed`, but an
+index failure never rolls back committed source data; inspect the summary and
+rebuild a stale index if needed. Cancellation is cooperative, not rollback.
+The standard job-detail JSON fields are `job_id`, `kind`, `status`, `params`,
+`result`, `error`, `summary`, `log_tail`, `created_at`, `started_at`,
+`completed_at`, and `links`; the HTTP enqueue response is the slimmer queued
+envelope.
+Single-item parse results additionally include the item `url`. The detail URL
+must have the public ETSI A2 form shown above; the empty `&S=` suffix is optional.
+Already parsed items are skipped unless `force` is true. Successful parsing
+atomically discovers unknown lists and messages without syncing or recording
+archive-page coverage; named attachment bytes are never downloaded.
+
+The shared show JSON fields are `url`, `list_id`, `subject`, `sender`, `date`,
+`date_precision`, `week`, `tdocs`, `attachments`, `content`,
+`content_truncated`, `parser_version`, and `parsed_at`. Search fields are those
+message/detail fields except full `content`, plus `score`, `snippet`,
+`matched_source`, `content_preview`, and `preview_truncated`. The `url` is the
+exact detail URL and `tdocs` are the effective current subject/detail IDs.
+Search exposes only a `content_preview` of at most 200 characters. The
+`content_truncated` source-to-storage flag and `preview_truncated`
+storage-to-preview flag are separate and nullable; both are null until a
+message has been parsed. The default stored-body limit is 10,000 Unicode
+characters; neither show nor search can recover text discarded before storage.
+The CLI, HTTP, and MCP read surfaces use these same JSON payload builders. See
+[sync/parse/index details](processes.md#listserv-archive-flow).
+
+Examples (replace the `show` placeholder with the exact URL from a search result):
+
+```bash
+curl 'http://127.0.0.1:13999/api/listserv/lists'
+curl 'http://127.0.0.1:13999/api/listserv/search?list_id=3GPP_TSG_RAN_WG5&date=%3E%3D%202026-10-01'
+curl 'http://127.0.0.1:13999/api/listserv/search?tdocs=%25R1-2610793%25'
+curl --get 'http://127.0.0.1:13999/api/listserv/show' \
+  --data-urlencode 'url=<exact-url-from-search>'
+curl -X POST 'http://127.0.0.1:13999/api/listserv/sync' \
+  -H 'Content-Type: application/json' \
+  -d '{"list_id":"3GPP_TSG_RAN_WG5","dates":[">= 2026-10-01","<= 2026-10-31"],"force":false}'
+curl -X POST 'http://127.0.0.1:13999/api/listserv/parse-item' \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://list.etsi.org/scripts/wa.exe?A2=3GPP_TSG_RAN_WG5_SIG;5d45a78f.2611B&S=","force":true}'
+```
+
+Search, status, and detail routes are SQL-only. Semantic/hybrid requests can
+return an actionable unavailable error if embeddings/vector support is not
+configured; filter-only and FTS search do not require vector support. The
+browser UI is at `/listserv`; empty or whitespace-only optional search fields
+are ignored in both HTTP search routes. Its list-ID search field accepts the
+same rich filter syntax as the search API (`%`/`_` LIKE patterns, leading `!`
+negation, `null`, and `not-null`). Stored list IDs appear as suggestions, and
+an empty field searches all lists. Suggestions use the compatibility ID array,
+not the catalog record objects. Sync and parse forms still require one exact
+list ID.
+The parse-item form accepts an explicit detail URL and an optional force flag;
+like the other mutation forms, it starts a background job and reports progress.
+Unparsed search results also offer **Parse now**, which queues that exact item
+without force and displays its job status; the page refreshes when the job ends.
+The collapsible catalog panel above message search has independent rich filters for
+list ID (`catalog_list_id`) and TSG (`catalog_tsg`). Its safe list-ID links open
+the corresponding public ETSI archive. Filtering the panel does not change the
+message search or restrict suggestions and job forms; search and pagination
+preserve the catalog filters. It opens automatically when catalog filters are
+active and shows entries in three columns on wide screens, fewer on narrow ones.
+`/listserv/show` takes the exact `url` query value. Its forms reuse these
+routes/jobs, and opening either page never syncs or parses. HTTP server
+authentication and job-queue deployment limitations remain as described above.

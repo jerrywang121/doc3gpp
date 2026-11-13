@@ -60,6 +60,15 @@ Important change entry points:
   matched-source/chunk provenance, mode-specific scores, JSON parity.
 - Jobs: `models/jobs.py`, `web/workers/handlers.py`, `job_worker.py`, job routes,
   `web/state.py`; cancellation is cooperative and queue ownership single-process.
+- LISTSERV archives and catalog: `models/listserv.py`,
+  `models/listserv_catalog.py`, `repository/listserv.py`,
+  `storage/db/listserv_catalog.py`, `storage/db/listserv_catalog_migration.py`,
+  `services/listserv_sync.py`, `services/listserv_parse.py`,
+  `services/listserv_search.py`, `services/listserv_index.py`,
+  `services/listserv_service.py`, `models/listserv_payloads.py`,
+  `storage/repositories/listserv_sql.py`, `web/routes/listserv.py`,
+  `web/mcp_server.py`, `web/workers/listserv_jobs.py`; see
+  [runtime contracts](docs/processes.md#listserv-archive-flow).
 - MCP: `web/mcp_server.py`; `get_skill` returns packaged raw Markdown, other
   matching JSON reads share HTTP payloads. Register tools, not duplicate queries.
   `web/mcp_stdio.py` owns `doc3gpp mcp`, reusing `build_state` and
@@ -79,6 +88,38 @@ cache recovery, semantic freshness, or resource ownership. In particular,
 do not confuse SQL completeness with derived-cache availability or make a
 snapshot content read silently download/parse.
 
+For LISTSERV changes, preserve public-host-only transport, sync catalog
+registration only after a date-matching message, actual-page URL coverage, the separate
+sync/parse boundary, SQL-only read paths, independent source/index state, and
+shared HTTP/MCP/CLI payload serializers. Keep ORM/schema reporting aligned and
+never add attachment downloads or implicit read-time work. Catalog listings
+return immutable `ListservList` records; retain the `list_ids` compatibility
+array and do not expose ORM entities. List-ID and TSG catalog filters intersect
+in SQL; the portal catalog is independent of message-search filters and its
+suggestions remain unfiltered.
+Explicit parse-item accepts a validated public A2 item URL, registers an unknown
+list only with a successful atomic message/detail commit, and creates no archive
+coverage. It skips parsed items unless forced, preserves existing metadata and
+supports stored URL aliases with or without the empty `&S=` suffix. Source and
+index failures remain distinct; neither parsing nor discovery downloads
+attachments.
+Sync selects A1 archive months overlapping requested dates plus one neighboring
+month on each side; displayed message dates farther from the page label may be
+missed. Force refreshes selected pages but does not expand that selection.
+Reply-boundary detection is conservative and best-effort; parser improvements
+require a forced reparse of stored messages.
+Web LISTSERV facades and worker-built sync/parse services borrow the app's lazy
+shared embedder. Close per-job source/index resources on their worker thread,
+then app facades after jobs drain and before the shared embedder. CLI and
+standalone callers close factory-built services they own; never close injected
+providers.
+The LISTSERV catalog CLI supports table and JSON output; the web catalog is
+collapsible, and unparsed result cards queue exact-item parse jobs through the
+shared polling flow.
+SQLite catalog upgrade cleanup may fail after commit: preserve the explicit
+`ListservCatalogUpgradeCommittedError` outcome and discard the connection;
+do not report that already-committed changes were rolled back.
+
 ## Development and validation
 
 ```bash
@@ -96,6 +137,7 @@ lxml, openpyxl. Optional CLI/extraction/semantic/web extras are described in
 [config.md](docs/config.md#optional-dependencies). `[dev]` alone does not include
 every extraction/vector dependency. Tests import `src` and exclude online by
 default; the script uses xdist when installed (`-n 0` forces sequential).
+Run test with xdist when possible, only use sequential on targeted fail tests.
 
 Use shared test fixtures to clear cached settings and all relevant engines.
 Mock auto-sync transports to avoid unintended network calls. Do not claim

@@ -6,7 +6,13 @@ from sqlalchemy import inspect, text
 
 from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.base import Base
+from doc3gpp.storage.db.listserv_catalog import ensure_listserv_catalog
+from doc3gpp.storage.db.listserv_catalog_migration import upgrade_listserv_catalog
 from doc3gpp.storage.db.models import (
+    ListservArchivePageORM,  # noqa: F401 - ensures model metadata is loaded
+    ListservDetailORM,  # noqa: F401 - ensures model metadata is loaded
+    ListservListORM,  # noqa: F401 - ensures model metadata is loaded
+    ListservMessageORM,  # noqa: F401 - ensures model metadata is loaded
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
     SpecDocChunkORM,  # noqa: F401 - registers specdata tables on SpecDataBase
     SpecDocPresentationORM,  # noqa: F401 - registers specdata presentation storage
@@ -398,6 +404,87 @@ def _create_search_schema() -> None:
         )
 
 
+def _create_listserv_search_schema() -> None:
+    """Create or migrate the LISTSERV FTS5 virtual table and metadata sidecar on the main engine."""
+    engine = get_engine()
+    expected_layout = (
+        ("url", True),
+        ("list_id", False),
+        ("subject", False),
+        ("sender", False),
+        ("date", False),
+        ("week", False),
+        ("tdocs", False),
+        ("attachments", False),
+        ("content", False),
+        ("chunk_index", True),
+        ("source_revision", True),
+    )
+    with engine.begin() as conn:
+        try:
+            opts = conn.execute(text("PRAGMA compile_options")).all()
+        except Exception:  # noqa: BLE001 - best-effort schema creation
+            return
+        if not any(row[0] == "ENABLE_FTS5" for row in opts):
+            return
+
+        existing_sql = conn.execute(
+            text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'listserv_search'"
+            )
+        ).scalar()
+        if existing_sql is not None:
+            try:
+                columns_sql = (
+                    existing_sql.lower()
+                    .split("fts5(", 1)[1]
+                    .rsplit(")", 1)[0]
+                )
+                actual_layout = tuple(
+                    (
+                        parts[0],
+                        len(parts) > 1 and parts[1] == "unindexed",
+                    )
+                    for declaration in columns_sql.split(",")
+                    if (parts := declaration.strip().split())
+                )
+            except IndexError:
+                actual_layout = ()
+            if actual_layout != expected_layout:
+                conn.execute(text("DROP TABLE listserv_search"))
+
+        conn.execute(
+            text(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS listserv_search USING fts5(
+                    url UNINDEXED,
+                    list_id,
+                    subject,
+                    sender,
+                    date,
+                    week,
+                    tdocs,
+                    attachments,
+                    content,
+                    chunk_index UNINDEXED,
+                    source_revision UNINDEXED
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS listserv_search_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+        )
+
+
 _VEC_METADATA_COLUMNS = frozenset({"meeting_id", "tsg", "uploaded_date"})
 
 
@@ -495,6 +582,72 @@ def _create_vector_schema(dim: int | None = None) -> None:
             conn.execute(
                 text(
                     "INSERT OR IGNORE INTO vec_meta (key, value) "
+                    "VALUES ('embedding_dim', :d)"
+                ),
+                {"d": str(width)},
+            )
+
+
+def _create_listserv_vector_schema(dim: int | None = None) -> None:
+    """Create the LISTSERV sqlite-vec virtual table + meta and chunk-text sidecars on the main engine."""
+    engine = get_engine()
+    try:
+        import sqlite_vec  # noqa: F401 - confirm optional extension is installed
+    except ImportError:
+        return
+    from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
+    with engine.begin() as conn:
+        try:
+            load_sqlite_vec(conn.connection.driver_connection)
+        except Exception:  # noqa: BLE001 - best-effort schema creation
+            return
+        width = int(dim) if dim is not None else 384
+        conn.execute(
+            text(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_listserv_embeddings USING vec0(\n"
+                "    chunk_id TEXT PRIMARY KEY,\n"
+                "    url TEXT,\n"
+                "    chunk_index INTEGER,\n"
+                "    source_revision INTEGER,\n"
+                f"    embedding FLOAT[{width}] distance_metric=cosine\n"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS vec_listserv_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS vec_listserv_chunk_text (
+                    chunk_id TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    source_revision INTEGER NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    text TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_vec_listserv_chunk_text_url "
+                "ON vec_listserv_chunk_text (url)"
+            )
+        )
+        if dim is not None:
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO vec_listserv_meta (key, value) "
                     "VALUES ('embedding_dim', :d)"
                 ),
                 {"d": str(width)},
@@ -817,8 +970,12 @@ def create_schema(scope: str = "all") -> None:
         _migrate_content_document_id_index()
         _migrate_content_token_count()
         Base.metadata.create_all(bind=engine)
+        ensure_listserv_catalog(engine)
+        upgrade_listserv_catalog(engine)
         _create_search_schema()
+        _create_listserv_search_schema()
         _create_vector_schema()
+        _create_listserv_vector_schema()
     if scope in ("testcase", "all"):
         TestCaseBase.metadata.create_all(bind=get_testcase_engine())
     if scope in ("specdata", "all"):

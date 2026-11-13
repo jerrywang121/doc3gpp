@@ -474,13 +474,20 @@ def test_tomli_w_is_importable() -> None:
 
 
 def test_load_default_template_returns_canonical_string() -> None:
-    """The packaged template ends with the ``allowed_origins``
-    line (the last knob in the commented-out ``[mcp]`` block) and
-    starts with the canonical comment header."""
+    """The packaged template ends with the ``[listserv]`` block's
+    automatic-index settings and starts with the canonical comment header."""
     text = load_default_template()
 
     assert "# doc3gpp configuration file (TOML)" in text
-    assert text.rstrip().endswith('allowed_origins = ["http://127.0.0.1", "http://localhost"]')
+    assert "max_content_chars = 10000" in text
+    assert text.rstrip().endswith("auto_embed_on_parse = true")
+    for key in (
+        "auto_index_on_sync",
+        "auto_index_on_parse",
+        "auto_embed_on_sync",
+        "auto_embed_on_parse",
+    ):
+        assert f"{key} = true" in text
 
 
 def test_load_default_template_matches_packaged_file() -> None:

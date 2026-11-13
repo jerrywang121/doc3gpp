@@ -12,7 +12,15 @@ from sqlalchemy.engine import Engine
 
 from doc3gpp.models.jobs import JobStatus
 from doc3gpp.repository.protocols import JobRepository
-from doc3gpp.services.factory import build_tdoc_content_service
+from doc3gpp.services.factory import (
+    build_listserv_index_service,
+    build_listserv_search_service,
+    build_listserv_service,
+    build_tdoc_content_service,
+)
+from doc3gpp.services.listserv_index import ListservIndexService
+from doc3gpp.services.listserv_search import ListservSearchService
+from doc3gpp.services.listserv_service import ListservService
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -75,6 +83,30 @@ def get_tdoc_content_service(request: Request) -> TDocContentService:
         content_service = build_tdoc_content_service(settings=get_settings(request))
         services.tdoc_content = content_service
     return content_service
+
+
+def get_listserv_service(request: Request) -> ListservService:
+    """Return or lazily compose the SQL-only LISTSERV read service."""
+    services = get_services(request)
+    if services.listserv is None:
+        services.listserv = build_listserv_service(get_settings(request))
+    return services.listserv
+
+
+def get_listserv_search_service(request: Request) -> ListservSearchService:
+    """Return or lazily compose the LISTSERV search service."""
+    services = get_services(request)
+    if services.listserv_search is None:
+        services.listserv_search = build_listserv_search_service(get_settings(request))
+    return services.listserv_search
+
+
+def get_listserv_index_service(request: Request) -> ListservIndexService:
+    """Return or lazily compose the LISTSERV index service."""
+    services = get_services(request)
+    if services.listserv_index is None:
+        services.listserv_index = build_listserv_index_service(get_settings(request))
+    return services.listserv_index
 
 
 def get_wi_service(request: Request) -> WiService:
@@ -184,6 +216,9 @@ __all__ = [
     "get_engine",
     "get_job_repo",
     "get_job_worker",
+    "get_listserv_index_service",
+    "get_listserv_search_service",
+    "get_listserv_service",
     "get_meeting_service",
     "get_pending_jobs",
     "get_search_service",

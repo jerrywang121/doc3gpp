@@ -43,6 +43,7 @@ from doc3gpp.models.spec_doc import (
     SpecDocUnknownSpecError,
     SpecDocUnknownVersionError,
 )
+from doc3gpp.services.listserv_service import ListservMessageNotFoundError
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
 )
@@ -199,6 +200,7 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     SpecDocTooLargeError: ("spec_doc", MCP_CODE_TOO_LARGE),
     SpecDocNoDocxError: ("spec_doc", MCP_CODE_INVALID_PARAMS),
     JobNotFoundError: ("job", MCP_CODE_NOT_FOUND),
+    ListservMessageNotFoundError: ("listserv", MCP_CODE_NOT_FOUND),
     CacheMissError: ("tdoc_content", MCP_CODE_CACHE_MISS),
     InvalidFilterError: ("filter", MCP_CODE_INVALID_PARAMS),
     SearchQueryError: ("query", MCP_CODE_INVALID_PARAMS),
@@ -218,6 +220,21 @@ def map_mcp_error(exc: Exception) -> tuple[int, str, dict[str, Any]] | None:
     ``error`` slug plus the ``detail`` message, with a ``resource`` /
     ``hint`` where applicable so an AI client can correlate with a URL.
     """
+    if (
+        isinstance(exc, SearchIndexCorruptWebError)
+        and exc.resource == "listserv"
+    ):
+        data: dict[str, Any] = {
+            "error": _ERROR_SLUGS[SearchIndexCorruptWebError],
+            "detail": str(exc),
+            "resource": exc.resource,
+        }
+        if exc.resource == "listserv":
+            data["hint"] = "run: doc3gpp listserv index --rebuild"
+        if exc.args:
+            data["id"] = exc.args[0]
+        return (MCP_CODE_INTERNAL_ERROR, str(exc), data)
+
     for exc_type, (resource, code) in _MCP_RESOURCE_BY_EXC.items():
         if isinstance(exc, exc_type):
             data: dict[str, Any] = {"error": _ERROR_SLUGS[exc_type], "detail": str(exc), "resource": resource}
@@ -256,6 +273,7 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     SearchIndexCorruptError: "search_index_corrupt",
     SearchIndexCorruptWebError: "search_index_corrupt",
     JobNotFoundError: "job_not_found",
+    ListservMessageNotFoundError: "listserv_message_not_found",
     SettingsDisabledError: "settings_disabled",
     CacheMissError: "cache_miss",
 }
@@ -272,6 +290,7 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     SpecNotFoundError: 404,
     TestcaseNotFoundError: 404,
     SpecUnknownOnUpstreamError: 404,
+    ListservMessageNotFoundError: 404,
     SpecDocUnknownSpecError: 404,
     SpecDocUnknownVersionError: 404,
     SpecDocSelectionError: 400,
@@ -331,11 +350,12 @@ def map_domain_error(exc: Exception) -> JSONResponse:
                 body["hint"] = exc.hint
             if isinstance(exc, SearchIndexCorruptWebError):
                 body["resource"] = exc.resource
-                body["hint"] = (
-                    "run: doc3gpp tdoc index --rebuild"
-                    if exc.resource == "tdoc"
-                    else "run: doc3gpp spec doc index --rebuild"
-                )
+                if exc.resource == "tdoc":
+                    body["hint"] = "run: doc3gpp tdoc index --rebuild"
+                elif exc.resource == "listserv":
+                    body["hint"] = "run: doc3gpp listserv index --rebuild"
+                else:
+                    body["hint"] = "run: doc3gpp spec doc index --rebuild"
             return JSONResponse(status_code=status, content=body)
 
     return _internal_error_response()

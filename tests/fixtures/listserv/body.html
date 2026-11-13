@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+  <title>Message Body</title>
+  <style>body { font-family: sans-serif; }</style>
+</head>
+<body>
+  <h2>RAN1#126 MIMO Summary</h2>
+  <p>Dear colleagues, please review <strong>R1-2610793</strong> (also noted as r1-2610793), plenary <a href="https://www.3gpp.org/ftp/tsg_ran/RP-2601234.zip">RP-2601234</a>, and <a href="javascript:alert('xss')">unsafe link</a> with <code>R5s260009</code>.</p>
+  <p>We wrote: the comparison in section 4 > threshold 3 dB is uncertain prose and must stay in the current message.</p>
+  <ul>
+    <li>First action item</li>
+    <li>Second action item with inline &lt;script&gt;alert('escaped')&lt;/script&gt;</li>
+  </ul>
+  <script>alert("executed-script")</script>
+  <img src="x" onerror="alert(1)">
+  <blockquote type="cite">
+    <p>Prior quoted contribution R1-111111 should be stripped from the current message.</p>
+  </blockquote>
+  <div class="gmail_quote">
+    <p>On Wed, Sep 30, 2026 at 10:00 AM Chair wrote:</p>
+    <p>Older Gmail quoted TDoc R2-222222 should also be stripped.</p>
+  </div>
+</body>
+</html>

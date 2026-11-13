@@ -85,7 +85,7 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
     creates ``./doc3gpp.toml`` populated with the packaged template;
     ``load_config_data()`` parses it cleanly (every commented-out table
     disappears into the dict; the active ``[search]``, ``[tdoc_parse]``,
-    ``[word_conversion]``, and ``[server]`` blocks surface with their
+    ``[word_conversion]``, ``[server]``, and ``[listserv]`` blocks surface with their
     default values); and ``config show`` then dumps JSON that
     matches ``Settings().model_dump(mode="json")`` — proving the cache
     cleared and the file is wired into the loader.
@@ -102,7 +102,7 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
     path, data = load_config_data()
     assert path is not None and path.name == "doc3gpp.toml"
     # The packaged template has active [search], [tdoc_parse],
-    # [word_conversion], and [server] blocks; every other table is
+    # [word_conversion], [server], and [listserv] blocks; every other table is
     # commented out and disappears into the dict.
     assert data == {
         "search": {
@@ -122,6 +122,13 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
             "enabled": True,
             "host": "127.0.0.1",
             "port": 13999,
+        },
+        "listserv": {
+            "max_content_chars": 10000,
+            "auto_index_on_sync": True,
+            "auto_index_on_parse": True,
+            "auto_embed_on_sync": True,
+            "auto_embed_on_parse": True,
         },
     }
     assert Settings(**data).server.enabled is True
@@ -254,5 +261,12 @@ def test_config_init_force_overwrites(sqlite_env, tmp_path, monkeypatch) -> None
             "enabled": True,
             "host": "127.0.0.1",
             "port": 13999,
+        },
+        "listserv": {
+            "max_content_chars": 10000,
+            "auto_index_on_sync": True,
+            "auto_index_on_parse": True,
+            "auto_embed_on_sync": True,
+            "auto_embed_on_parse": True,
         },
     }

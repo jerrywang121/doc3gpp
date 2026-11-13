@@ -48,6 +48,10 @@ class JobKind(str, Enum):
     INDEX_SPEC_DOCS = "index_spec_docs"
     REBUILD_SEARCH = "rebuild_search"
     CACHE_PURGE = "cache_purge"
+    LISTSERV_SYNC = "listserv_sync"
+    LISTSERV_PARSE = "listserv_parse"
+    LISTSERV_PARSE_ITEM = "listserv_parse_item"
+    LISTSERV_INDEX = "listserv_index"
 
 
 class JobStatus(str, Enum):

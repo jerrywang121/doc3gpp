@@ -43,10 +43,10 @@ TDOC_ID_BASE_RE = re.compile(
 )
 
 
-# Spec number (``38.300`` or ``38.300-1``). The matching character class
-# deliberately stops at the first non-``.`` / non-``-`` / non-digit so
-# we don't greedily consume ``38.300.1`` into one token.
-SPEC_ID_RE = re.compile(r"\d+\.\d+(?:-\d+)?")
+# Spec number (``38.300`` or ``38.300-1``). Consume the non-digit prefix
+# (or start of text) so matching cannot retry within a digit run. The prefix
+# is preserved separately, and the optional suffix consumes only one part.
+SPEC_ID_RE = re.compile(r"(^|\D)(\d+\.\d+(?:-\d+)?)")
 
 
 def normalize_query(text: str) -> str:
@@ -95,6 +95,6 @@ def normalize_query(text: str) -> str:
 
     # Second pass: handle spec ids. Replace ``.`` with ``_`` so the
     # full id survives ``unicode61`` splitting.
-    text = SPEC_ID_RE.sub(lambda m: m.group(0).replace(".", "_"), text)
+    text = SPEC_ID_RE.sub(lambda m: m.group(1) + m.group(2).replace(".", "_"), text)
 
     return text

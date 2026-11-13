@@ -185,7 +185,7 @@ def _extract_uploaded_date(anchor) -> date | None:
     if not text:
         return None
     try:
-        return datetime.strptime(text, _FTP_DATE_FORMAT).date()  # noqa: DTZ007
+        return datetime.strptime(text, _FTP_DATE_FORMAT).date()
     except ValueError:
         logger.debug("Could not parse uploaded_date %r from FTP listing", text)
         return None

@@ -420,8 +420,8 @@ LISTSERV sync uses the exact supplied list ID to discover public archive pages
 from `https://list.etsi.org/scripts/wa.exe?A0=...`. Only HTTPS requests to the
 intended public LISTSERV host are followed, including redirects and embedded
 body URLs. Authentication-required/private archives and arbitrary external
-hosts are rejected; there is no attachment download path. Example IDs such as
-`RAN-WG1` illustrate input syntax only and do not define an allowlist.
+hosts are rejected; there is no attachment download path. The public RAN5 list
+`3GPP_TSG_RAN_WG5` is one example, not an allowlist.
 
 Sync stores message listing metadata, not message bodies. With no date filters,
 it selects the rolling preceding calendar year through today, inclusive (the
@@ -491,38 +491,39 @@ from doc3gpp.services.factory import (
 sync_service = build_listserv_sync_service()
 try:
     sync_result = sync_service.sync(
-        "RAN-WG1", dates=[">= 2026-10-01", "<= 2026-10-31"]
+        "3GPP_TSG_RAN_WG5", dates=[">= 2026-10-01", "<= 2026-10-31"]
     )
 finally:
     sync_service.close()
 
 parse_service = build_listserv_parse_service()
 try:
-    parse_result = parse_service.parse("RAN-WG1")
+    parse_result = parse_service.parse("3GPP_TSG_RAN_WG5")
 finally:
     parse_service.close()
 
 listserv_service = build_listserv_service()
 catalog = listserv_service.list_lists()  # ordered list_id, TSG, and description records
 list_ids = listserv_service.list_ids()  # compatibility IDs from the same catalog
-record = listserv_service.show(
-    "https://list.etsi.org/scripts/wa.exe?A2=RAN-WG1;2026-10-15;EXAMPLE"
-)
 search_service = build_listserv_search_service()
 try:
     hits = search_service.search(
         text="handover",
         filters=ListservFilters(
-            list_id="RAN-WG1",
+            list_id="3GPP_TSG_RAN_WG5",
             dates=parse_date_set([">= 2026-10-01", "<= 2026-10-31"]),
             limit=10,
         ),
     )
 finally:
     search_service.close()
+
+if hits:
+    record = listserv_service.show(hits[0].record.message.url)
 ```
 
-`RAN-WG1` and the URL are illustrative inputs, not an allowlist. Sync and parse
+The example uses a public RAN5 list, not an allowlist; `show` uses an exact URL
+returned by search. Sync and parse
 builders own their source and should be closed when finished; list/show/search
 builders are SQL-backed reads. Close the search service when finished to release
 any lazily created semantic service it owns.

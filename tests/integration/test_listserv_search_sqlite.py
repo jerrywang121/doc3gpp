@@ -330,6 +330,33 @@ def test_tdocs_filter_exact_subject_only_detail_only_null_not_null_and_negation(
     ]
 
 
+def test_tdocs_contains_filter_matches_one_id_in_comma_delimited_detail_value(
+    repository: ListservRepository,
+) -> None:
+    page = _make_page()
+    message = _make_message(
+        url="https://list.etsi.org/scripts/wa.exe?A2=multi-tdoc-value",
+        subject="Multiple TDoc values",
+        subject_tdocs=(),
+    )
+    repository.commit_page(page, [message], parse_date_set(["= 2026-10-01"]), ())
+    repository.save_detail(
+        ListservDetail(
+            url=message.url,
+            attachments=(),
+            tdocs=("R1-2610793", "R1-2610792"),
+            content="Body mentions multiple TDocs",
+            content_truncated=False,
+            parser_version="1.0.0",
+            parsed_at=datetime(2026, 10, 2, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    matches = repository.select(ListservFilters(tdocs="%R1-2610793%"))
+
+    assert [record.message.url for record in matches] == [message.url]
+
+
 def test_metadata_only_discoverable_before_parse_and_truncation_states_and_payloads(
     repository: ListservRepository,
 ) -> None:

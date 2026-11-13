@@ -79,6 +79,22 @@ _TESTCASE_GROUPS = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
 
 _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "spec", "since", "until")
 
+_LISTSERV_DATE_HELP = (
+    "Date comparison: <op> YYYY-MM-DD or <op> 'YYYY-MM-DD' "
+    "(e.g. >= 2026-10-15); operators =, !=, <, <=, >, >=. "
+    "Repeatable; expressions intersect."
+)
+_LISTSERV_FILTER_HELP = (
+    "Rich LIKE: % matches any number of characters; _ matches one character; "
+    "prefix ! to negate; 'null' matches SQL NULL; 'not-null' matches SQL NOT NULL; "
+    "plain values match exactly."
+)
+_LISTSERV_TDOCS_FILTER_HELP = (
+    "For tdocs, null means no IDs (both subject and extracted fields NULL or empty); "
+    "not-null means at least one ID. Stored TDoc IDs are comma-delimited; use a "
+    "contains pattern such as %R1-2610793% to match an ID within a multi-ID value."
+)
+
 _F = TypeVar("_F", bound=Callable[..., Any])
 _MCP_FILTER_STRING = str
 
@@ -1198,26 +1214,53 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
     @server.tool(
         name="listserv_sync",
-        description="Enqueue sync of one exact public ETSI LISTSERV list ID.",
+        description=(
+            "Enqueue sync for one exact public ETSI LISTSERV list ID. It fetches "
+            "metadata for email items, not message content."
+        ),
     )
     @_mcp_error_guard
     def listserv_sync(
-        list_id: Annotated[str, Field(description="Exact LISTSERV list ID to sync.")],
-        date: Annotated[list[str] | None, Field(description="Repeatable displayed-date comparison filters.")] = None,
-        force: Annotated[bool, Field(description="Revisit selected archive pages regardless of stored coverage.")] = False,
+        list_id: Annotated[
+            str,
+            Field(
+                description="Exact public LISTSERV list ID to sync (e.g. 3GPP_TSG_RAN_WG5).",
+                examples=["3GPP_TSG_RAN_WG5"],
+            ),
+        ],
+        date: Annotated[
+            list[str] | None,
+            Field(description=_LISTSERV_DATE_HELP, examples=[[">= 2026-10-15"]]),
+        ] = None,
+        force: Annotated[
+            bool,
+            Field(description="Re-fetch email-item metadata even for covered archive pages."),
+        ] = False,
     ) -> str:
         job = enqueue_listserv_sync(state.services.job_repo, list_id, date, force)
         return _job_result(job, "queued listserv_sync")
 
     @server.tool(
         name="listserv_parse",
-        description="Enqueue parsing of stored messages for one exact LISTSERV list ID.",
+        description="Enqueue parsing of stored email items for one exact LISTSERV list ID.",
     )
     @_mcp_error_guard
     def listserv_parse(
-        list_id: Annotated[str, Field(description="Exact LISTSERV list ID to parse.")],
-        date: Annotated[list[str] | None, Field(description="Repeatable displayed-date comparison filters.")] = None,
-        force: Annotated[bool, Field(description="Reparse already-parsed selected messages.")] = False,
+        list_id: Annotated[
+            str,
+            Field(
+                description="Exact public LISTSERV list ID to parse (e.g. 3GPP_TSG_RAN_WG5).",
+                examples=["3GPP_TSG_RAN_WG5"],
+            ),
+        ],
+        date: Annotated[
+            list[str] | None,
+            Field(description=_LISTSERV_DATE_HELP, examples=[[">= 2026-10-15"]]),
+        ] = None,
+        force: Annotated[
+            bool,
+            Field(description="Reparse selected stored email items even if already parsed."),
+        ] = False,
     ) -> str:
         job = enqueue_listserv_parse(state.services.job_repo, list_id, date, force)
         return _job_result(job, "queued listserv_parse")
@@ -1233,21 +1276,68 @@ def build_mcp_server(state: WebState) -> MCPServer:
     @server.tool(
         name="listserv_search",
         description=(
-            "Search stored LISTSERV messages by text, semantic similarity, or filters. "
-            "Dates are repeatable displayed-date comparisons; limit and offset page results."
+            "Search stored LISTSERV email items by text, semantic similarity, or filters. "
+            "Repeated displayed-date comparisons intersect; limit and offset page results."
         ),
     )
     @_mcp_error_guard
     def listserv_search(
-        date: Annotated[list[str] | None, Field(description="Repeatable displayed-date comparison filters.")] = None,
-        list_id: Annotated[str | None, Field(description="Rich LIKE filter on the stored list ID.")] = None,
-        sender: Annotated[str | None, Field(description="Rich LIKE filter on the displayed sender.")] = None,
-        subject: Annotated[str | None, Field(description="Rich LIKE filter on the subject.")] = None,
-        tdocs: Annotated[str | None, Field(description="Rich LIKE filter on extracted TDoc IDs.")] = None,
-        text: Annotated[str | None, Field(description="FTS5 text or MATCH expression.")] = None,
-        semantic: Annotated[str | None, Field(description="Embedding query for semantic search.")] = None,
-        limit: Annotated[int, Field(description="Maximum number of results (0–150).")] = 20,
-        offset: Annotated[int, Field(description="Number of results to skip.")] = 0,
+        date: Annotated[
+            list[str] | None,
+            Field(description=_LISTSERV_DATE_HELP, examples=[[">= 2026-10-15"]]),
+        ] = None,
+        list_id: Annotated[
+            str | None,
+            Field(
+                description=f"Rich LIKE filter on stored list ID. {_LISTSERV_FILTER_HELP}",
+                examples=["3GPP_TSG_RAN_WG5", "%RAN%"],
+            ),
+        ] = None,
+        sender: Annotated[
+            str | None,
+            Field(
+                description=f"Rich LIKE filter on displayed sender. {_LISTSERV_FILTER_HELP}",
+                examples=["%john.doe%"],
+            ),
+        ] = None,
+        subject: Annotated[
+            str | None,
+            Field(
+                description=f"Rich LIKE filter on subject. {_LISTSERV_FILTER_HELP}",
+                examples=["%handover%"],
+            ),
+        ] = None,
+        tdocs: Annotated[
+            str | None,
+            Field(
+                description=(
+                    f"Rich LIKE filter on extracted TDoc IDs. "
+                    f"{_LISTSERV_FILTER_HELP} {_LISTSERV_TDOCS_FILTER_HELP}"
+                ),
+                examples=["%R1-2610793%"],
+            ),
+        ] = None,
+        text: Annotated[
+            str | None,
+            Field(
+                description="FTS5 MATCH text query (e.g. handover OR mobility).",
+                examples=["handover OR mobility"],
+            ),
+        ] = None,
+        semantic: Annotated[
+            str | None,
+            Field(
+                description="Natural-language query for semantic search.",
+                examples=["handover enhancements"],
+            ),
+        ] = None,
+        limit: Annotated[
+            int, Field(description="Maximum number of results (0–150).", examples=[20])
+        ] = 20,
+        offset: Annotated[
+            int,
+            Field(description="Non-negative number of results to skip.", examples=[0]),
+        ] = 0,
     ) -> str:
         try:
             filters = ListservFilters(
@@ -1275,11 +1365,16 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
     @server.tool(
         name="listserv_show",
-        description="Show a stored LISTSERV message by its exact detail URL.",
+        description="Show a stored LISTSERV email item by its exact detail URL from listserv_search.",
     )
     @_mcp_error_guard
     def listserv_show(
-        url: Annotated[str, Field(description="Exact stored message detail URL.")]
+        url: Annotated[
+            str,
+            Field(
+                description="Exact stored email-item URL returned by listserv_search; pass it unchanged.",
+            ),
+        ]
     ) -> str:
         return _to_json(listserv_record_payload(services.listserv.show(url)))
 
@@ -1293,16 +1388,41 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
     @server.tool(
         name="listserv_index_rebuild",
-        description="Enqueue LISTSERV FTS5/vector index maintenance.",
+        description=(
+            "Enqueue LISTSERV FTS5/vector index maintenance. rebuild_all rebuilds both "
+            "indexes and is mutually exclusive with the individual rebuild flags."
+        ),
     )
     @_mcp_error_guard
     def listserv_index_rebuild(
-        rebuild: Annotated[bool, Field(description="Rebuild the LISTSERV FTS5 index.")] = False,
-        rebuild_embeddings: Annotated[bool, Field(description="Rebuild the LISTSERV vector index.")] = False,
-        rebuild_all: Annotated[bool, Field(description="Rebuild both LISTSERV indexes.")] = False,
-        batch: Annotated[int | None, Field(description="Positive rebuild batch size.")] = None,
-        resume: Annotated[bool, Field(description="Resume an interrupted rebuild.")] = False,
-        stale_only: Annotated[bool, Field(description="Only rebuild stale LISTSERV records.")] = False,
+        rebuild: Annotated[
+            bool,
+            Field(description="Rebuild the LISTSERV FTS5 full-text index.", examples=[True]),
+        ] = False,
+        rebuild_embeddings: Annotated[
+            bool,
+            Field(description="Rebuild the LISTSERV vector embedding index.", examples=[True]),
+        ] = False,
+        rebuild_all: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Rebuild both indexes; mutually exclusive with rebuild and "
+                    "rebuild_embeddings."
+                ),
+                examples=[True],
+            ),
+        ] = False,
+        batch: Annotated[
+            int | None,
+            Field(description="Positive batch size (at least 1).", examples=[100]),
+        ] = None,
+        resume: Annotated[
+            bool, Field(description="Resume an interrupted rebuild.", examples=[True])
+        ] = False,
+        stale_only: Annotated[
+            bool, Field(description="Rebuild only stale LISTSERV records.", examples=[True])
+        ] = False,
     ) -> str:
         job = enqueue_listserv_index(
             state.services.job_repo,

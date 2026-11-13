@@ -73,6 +73,21 @@ TTCN test suites release normally are updated two to three weeks after a quarter
 RAN5 TTCN Workshops meeting discuss TTCN test models, typically four to six times per year.
 Search email meetings and workshops separately from regular RAN5 meetings.
 
+### LISTSERV email list
+
+The 3GPP uses ETSI LISTSERV public email list for offline communication.
+Especially during meeting periods (a couple of weeks before, during, and
+after a meeting), the LISTSERV list is used for annoucing TDoc revisions,
+merging, or directly discussing changes.
+
+Many list IDs indicate which TSG or WG they belong to, e.g.:
+`3GPP_TSG_RAN` for RAN planery (`RP`); `3GPP_TSG_RAN_WG5` for RAN5 (`R5`);
+`3GPP_TSG_RAN_WG5_RF` and `3GPP_TSG_RAN_WG5_SIG` for RF and singalling sub-meeting groups.
+`3GPP_TSG_RAN_WG5_SIG` is also used for TTCN email meeting.
+
+The LISTSERV list archive is a great source of information for tracing
+the discussions and reasonings behind how the TDoc were formed.
+
 ## Install and Setup MCP
 
 For instructions on installing the doc3gpp and configuring MCP, see the
@@ -89,8 +104,7 @@ Read tools return one text item that contains JSON.
 The `get_tdoc_content` tool instead returns the content itself, and `get_skill({})` returns this complete skill as raw Markdown including its frontmatter.
 Parse JSON before using IDs, versions, or links.
 
-Most sync, parse, and index tools return `{job_id, status, message, links}`;
-LISTSERV enqueue tools instead return `{job_id, status, url}`.
+sync, parse, and index tools return `{job_id, status, message, links}`;
 Poll `get_job({"job_id":"..."})` until `status` is `succeeded`, `failed`, or `cancelled`.
 Inspect `result`, `error`, and `log_tail`.
 A `queued` or `running` job does not prove that rows are available.
@@ -227,47 +241,47 @@ Each result contains nested `statuses` entries with `path`, `gcf_ptcrb`, and `tt
 
 ### ETSI LISTSERV archives
 
-LISTSERV contains public email archive messages, separate from meeting TDocs.
-Supply an exact public list ID for sync and parse; `RAN-WG1` below is only an
-example, not an allowlist. `listserv_list({})` returns IDs already represented
-by stored messages, not a catalogue of all available lists.
+LISTSERV list contains public email archive messages.
 
-1. Use `listserv_search` to inspect stored listings, or `listserv_list` to see
-   which list IDs are already stored.
-2. If listings are missing or stale, enqueue `listserv_sync` with an exact
-   `list_id`. Sync fetches listing metadata, not message bodies. Without `date`,
-   it covers the preceding calendar year through today, inclusive.
-3. Poll `get_job` to a terminal status and inspect the result before continuing.
-4. Enqueue `listserv_parse` for the same list to fetch details of stored
-   messages; it does not sync. Poll the job again. Use `force: true` to reparse
-   previously parsed messages, or to make sync revisit covered pages.
-5. Search again, then pass the exact returned `url` to `listserv_show` for the
-   full stored body and attachment metadata.
+1. Use `listserv_list` to discover known 3GPP list IDs, and their mapping TSG WG.
+   Note it is not a catalogue of all available lists.
+2. Use `listserv_sync` to fetch email items (messages) for a sepcific list ID, during a time period.
+   sync only fetch message metadata, inlucde subject, sender, timestamp, its unique `url`.
+   For getting messages on a target TSG WG, use the corresponding list ID.
+   Note - there may be minutes delay for real world email messages appear on the LISTSERV server.
+   sync again to get newly added messages.
+3. Use `listserv_parse` for the same list to fetch details of already synced messages.
+   parse get the email text content, attachement list (names and urls), and extracted
+   list of TDocs (comma-delimited string) it mentioned in the email.
+   Note - parse does not process attachement. If needed, follow the attachment url to get its content.
+4. Use `listserv_search` to search stored (synced) email items.
+   Three types search are supported, which can be combined if the corresonding args given.
+     - full text (--text, with fts5 search syntax)
+      - vector/embeding search (--semantic, free text like native question)
+      - field filter (--<field>, with enriched SQL LIKE style)
+   For `tdocs`, stored IDs are comma-delimited; use a contains pattern like
+   `"%R1-2610793%"` to match one ID within a multi-ID value.
+    search returns message metadata, and if parsed, their TDocs and contents preview (200 chars).
+5. Use `listserv_show` with a message's unique `url` to get its full content and attachemnt list.
+   a return field `content_truncated` indicates if the parsed content is truncated, in which case
+   you need to use `url` to directly web fetch online to get the full content.
+
+Examples:
 
 ```text
-listserv_sync         {"list_id":"RAN-WG1","date":[">= 2026-10-01","<= 2026-10-31"]}
+# sync messages meta for RAN5 meeting
+listserv_sync         {"list_id":"3GPP_TSG_RAN_WG5","date":[">= 2026-10-01","<= 2026-10-31"]}
 get_job               {"job_id":"<sync job_id>"}  # poll until terminal
-listserv_parse        {"list_id":"RAN-WG1","date":[">= 2026-10-01","<= 2026-10-31"]}
+# parse message detail
+listserv_parse        {"list_id":"3GPP_TSG_RAN_WG5","date":[">= 2026-10-01","<= 2026-10-31"]}
 get_job               {"job_id":"<parse job_id>"} # poll until terminal
-listserv_search       {"list_id":"RAN-WG1","tdocs":"R1-2610793","limit":10}
-listserv_show         {"url":"<exact url from listserv_search>"}
+# search for R1-2610793 and AI in lists matching the RAN WG pattern
+listserv_search       {"list_id":"3GPP_TSG_RAN_WG%","tdocs":"%R1-2610793%","text":"AI","limit":10}
+# get full content and attachement info on a message
+listserv_show         {"url":"<exact url of the target message>"}
+# check the search index status (fts5 and semantic index if embedding is configured)
 listserv_index_status {}
 ```
-
-`date` is an array of intersecting comparisons (`=`, `!=`, `<`, `<=`, `>`,
-`>=`) against the displayed calendar date. Search also supports `sender`,
-`subject`, `tdocs`, `text`, `semantic`, `limit` (default 20, 0–150), and
-`offset`; its list ID and other metadata filters support rich LIKE patterns.
-`text` selects FTS5, `semantic` vector search, both hybrid search, and neither
-filter-only search. Index availability errors are not empty results.
-
-All list, search, show, and index-status reads use stored data; they never fetch
-or parse messages. Search returns at most a 200-character `content_preview`;
-`listserv_show` returns the complete stored body, which defaults to a 10,000
-Unicode-character cap. `content_truncated` reports the original-to-storage cut;
-`preview_truncated` reports the separate storage-to-preview cut. Both are null
-for unparsed messages. Attachments are metadata only; their bytes are not
-downloaded. Only public ETSI LISTSERV pages are supported.
 
 Sync/parse job results separate source `failed`/`failures` from derived
 `index_failed`/`index_failures`; either can fail the job, but index failures do

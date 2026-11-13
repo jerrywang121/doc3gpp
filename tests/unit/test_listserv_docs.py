@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from urllib.parse import unquote, urlsplit
 
 import pytest
+from fastapi import FastAPI
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -33,7 +34,13 @@ from doc3gpp.storage.db.models import (
     ListservMessageORM,
 )
 from doc3gpp.web.mcp_server import build_mcp_server
-from doc3gpp.web.routes.listserv import search_listserv, show_listserv_message
+from doc3gpp.web.routes.listserv import (
+    router as listserv_router,
+)
+from doc3gpp.web.routes.listserv import (
+    search_listserv,
+    show_listserv_message,
+)
 
 DOC_ROOT = Path("docs")
 DOCS = (
@@ -89,6 +96,17 @@ def test_mcp_enqueue_result_documents_exact_response_fields() -> None:
         "Their returned JSON uses the same `job_id`, `status`, `message`, and `links` "
         "shape, including the LISTSERV enqueue tools."
         in normalized_text
+    )
+
+    skill_text = " ".join(
+        Path("src/doc3gpp/data/skills/doc3gpp/SKILL.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "LISTSERV enqueue tools instead return `{job_id, status, url}`." not in skill_text
+    assert (
+        "sync, parse, and index tools return `{job_id, status, message, links}`;"
+        in skill_text
     )
 
 
@@ -192,6 +210,230 @@ def test_listserv_search_help_matches_documented_format_scope() -> None:
     for line in section.splitlines():
         if line.startswith("doc3gpp listserv ") and "--format" in line:
             assert re.search(r"--format\s+(?:table|json)\b", line), line
+
+
+def _listserv_cli_help(*args: str) -> str:
+    result = CliRunner().invoke(app, ["listserv", *args, "--help"])
+    assert result.exit_code == 0, result.output
+    return " ".join(result.output.replace("│", " ").split())
+
+
+def _listserv_openapi():
+    app = FastAPI()
+    app.include_router(listserv_router)
+    return app.openapi()
+
+
+def _request_body_schema(openapi, path: str) -> dict:
+    operation = openapi["paths"][path]["post"]
+    schema_ref = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    name = schema_ref.rsplit("/", 1)[1]
+    return openapi["components"]["schemas"][name]
+
+
+def test_listserv_batch_cli_help_documents_email_items_and_date_syntax() -> None:
+    sync_help = _listserv_cli_help("sync")
+    parse_help = _listserv_cli_help("parse")
+
+    assert "email items" in sync_help.lower()
+    assert "email items" in parse_help.lower()
+    assert "3GPP_TSG_RAN_WG5" in sync_help
+    assert "3GPP_TSG_RAN_WG5" in parse_help
+    assert ">= 2026-10-15" in sync_help
+    assert "intersect" in sync_help.lower()
+
+
+def test_listserv_search_cli_help_documents_filter_and_query_syntax() -> None:
+    search_help = _listserv_cli_help("search").lower()
+
+    assert "null" in search_help
+    assert "not-null" in search_help
+    assert "!" in search_help
+    assert "%" in search_help
+    assert "_" in search_help
+    assert "% matches any number of characters" in search_help
+    assert "_ matches one character" in search_help
+    assert "'null' matches sql null" in search_help
+    assert "'not-null' matches sql not null" in search_help
+    assert "for tdocs, null means no ids" in search_help
+    assert "both subject and extracted fields null or empty" in search_help
+    assert "not-null means at least one id" in search_help
+    assert "handover or mobility" in search_help
+    assert "non-negative" in search_help
+    assert "comma-delimited" in search_help
+    assert "%r1-2610793%" in search_help
+
+
+def test_listserv_show_and_index_cli_help_documents_url_and_rebuild_rules() -> None:
+    show_help = _listserv_cli_help("show")
+    index_help = _listserv_cli_help("index").lower()
+
+    assert "listserv_search" in show_help
+    assert "pass it unchanged" in show_help
+    assert "mutually exclusive" in index_help
+    assert "at least 1" in index_help
+
+
+def test_listserv_openapi_documents_search_and_show_parameters() -> None:
+    openapi = _listserv_openapi()
+    paths = openapi["paths"]
+    for path, method in (
+        ("/api/listserv/lists", "get"),
+        ("/api/listserv/search", "get"),
+        ("/api/listserv/show", "get"),
+        ("/api/listserv/index/status", "get"),
+        ("/api/listserv/sync", "post"),
+        ("/api/listserv/parse", "post"),
+        ("/api/listserv/index", "post"),
+    ):
+        assert paths[path][method].get("description")
+
+    search_operation = paths["/api/listserv/search"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in search_operation["parameters"]}
+    assert all(parameter.get("description") for parameter in parameters.values())
+    date_help = parameters["date"]["description"].lower()
+    assert "yyyy-mm-dd" in date_help
+    assert "or <op> 'yyyy-mm-dd'" in date_help
+    assert "operators =, !=, <, <=, >, >=" in date_help
+    assert ">= 2026-10-15" in date_help
+    assert "Rich LIKE" in parameters["list_id"]["description"]
+    assert "3GPP_TSG_RAN_WG5" in parameters["list_id"]["schema"].get("examples", [])
+    assert "null" in parameters["sender"]["description"]
+    sender_help = parameters["sender"]["description"].lower()
+    assert "'null' matches sql null" in sender_help
+    assert "'not-null' matches sql not null" in sender_help
+    assert "% matches any number of characters" in sender_help
+    assert "_ matches one character" in sender_help
+    assert "not-null" in sender_help
+    assert "%" in sender_help
+    assert "_" in parameters["sender"]["description"]
+    assert "!" in parameters["sender"]["description"]
+    assert "subject" in parameters["subject"]["description"].lower()
+    tdocs_help = parameters["tdocs"]["description"].lower()
+    assert "for tdocs, null means no ids" in tdocs_help
+    assert "both subject and extracted fields null or empty" in tdocs_help
+    assert "not-null means at least one id" in tdocs_help
+    assert "comma-delimited" in tdocs_help
+    assert "%r1-2610793%" in tdocs_help
+    assert "%R1-2610793%" in parameters["tdocs"]["schema"].get("examples", [])
+    assert "handover OR mobility" in parameters["text"]["description"]
+    assert "semantic" in parameters["semantic"]["description"].lower()
+    assert "150" in parameters["limit"]["description"]
+    assert "non-negative" in parameters["offset"]["description"].lower()
+
+    show_parameters = {
+        parameter["name"]: parameter
+        for parameter in paths["/api/listserv/show"]["get"]["parameters"]
+    }
+    assert "listserv_search" in show_parameters["url"]["description"]
+    assert "exact" in show_parameters["url"]["description"].lower()
+    assert not show_parameters["url"]["schema"].get("examples")
+
+
+def test_listserv_openapi_documents_batch_and_index_request_bodies() -> None:
+    openapi = _listserv_openapi()
+    batch = _request_body_schema(openapi, "/api/listserv/sync")["properties"]
+    assert "3GPP_TSG_RAN_WG5" in batch["list_id"].get("description", "")
+    assert "3GPP_TSG_RAN_WG5" in batch["list_id"].get("examples", [])
+    assert "YYYY-MM-DD" in batch["dates"].get("description", "")
+    assert "intersect" in batch["dates"].get("description", "")
+    assert batch["dates"].get("examples")
+    assert "covered" in batch["force"].get("description", "")
+
+    index = _request_body_schema(openapi, "/api/listserv/index")["properties"]
+    assert "FTS5" in index["rebuild"].get("description", "")
+    assert "vector" in index["rebuild_embeddings"].get("description", "")
+    assert "mutually exclusive" in index["rebuild_all"].get("description", "")
+    assert "at least 1" in index["batch"].get("description", "")
+    assert index["batch"].get("examples")
+    assert "resume" in index["resume"].get("description", "").lower()
+    assert "stale" in index["stale_only"].get("description", "").lower()
+
+
+def test_listserv_mcp_tools_document_argument_formats_and_examples() -> None:
+    mcp_state = SimpleNamespace(
+        settings=object(),
+        services=SimpleNamespace(
+            tdoc_content=object(),
+            listserv=object(),
+            listserv_search=object(),
+            listserv_index=object(),
+            job_repo=object(),
+        ),
+    )
+    server = build_mcp_server(mcp_state)
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    listserv_names = (
+        "listserv_sync",
+        "listserv_parse",
+        "listserv_list",
+        "listserv_search",
+        "listserv_show",
+        "listserv_index_status",
+        "listserv_index_rebuild",
+    )
+
+    for name in listserv_names:
+        tool = tools[name]
+        assert tool.description
+        for argument, schema in tool.input_schema["properties"].items():
+            assert schema.get("description"), f"{name}.{argument} has no description"
+
+    sync_tool = tools["listserv_sync"]
+    assert "email items" in sync_tool.description.lower()
+    sync = sync_tool.input_schema["properties"]
+    assert "3GPP_TSG_RAN_WG5" in sync["list_id"]["description"]
+    assert "3GPP_TSG_RAN_WG5" in sync["list_id"].get("examples", [])
+    assert ">= 2026-10-15" in repr(sync["date"].get("examples", []))
+    date_help = sync["date"]["description"].lower()
+    assert "yyyy-mm-dd" in date_help
+    assert "or <op> 'yyyy-mm-dd'" in date_help
+    assert "operators =, !=, <, <=, >, >=" in date_help
+    assert ">= 2026-10-15" in date_help
+    assert "intersect" in date_help
+
+    parse_tool = tools["listserv_parse"]
+    assert "email items" in parse_tool.description.lower()
+    assert "3GPP_TSG_RAN_WG5" in parse_tool.input_schema["properties"]["list_id"]["examples"]
+    assert "YYYY-MM-DD" in parse_tool.input_schema["properties"]["date"]["description"]
+
+    search_tool = tools["listserv_search"]
+    assert "email items" in search_tool.description.lower()
+    search = search_tool.input_schema["properties"]
+    assert "3GPP_TSG_RAN_WG5" in search["list_id"].get("examples", [])
+    for name in ("list_id", "sender", "subject", "tdocs"):
+        description = search[name]["description"]
+        assert "null" in description
+        assert "not-null" in description
+        assert "%" in description and "_" in description and "!" in description
+        assert "plain values match exactly" in description
+    sender_help = search["sender"]["description"].lower()
+    assert "'null' matches sql null" in sender_help
+    assert "'not-null' matches sql not null" in sender_help
+    assert "% matches any number of characters" in sender_help
+    assert "_ matches one character" in sender_help
+    tdocs_help = search["tdocs"]["description"].lower()
+    assert "for tdocs, null means no ids" in tdocs_help
+    assert "both subject and extracted fields null or empty" in tdocs_help
+    assert "not-null means at least one id" in tdocs_help
+    assert "comma-delimited" in tdocs_help
+    assert "%r1-2610793%" in tdocs_help
+    assert "%R1-2610793%" in search["tdocs"].get("examples", [])
+    assert "handover OR mobility" in search["text"]["description"]
+    assert "150" in search["limit"]["description"]
+    assert "non-negative" in search["offset"]["description"].lower()
+
+    show_tool = tools["listserv_show"]
+    assert "email item" in show_tool.description.lower()
+    url_help = show_tool.input_schema["properties"]["url"]["description"]
+    assert "listserv_search" in url_help
+    assert "exact" in url_help.lower()
+    assert not show_tool.input_schema["properties"]["url"].get("examples")
+
+    index = tools["listserv_index_rebuild"].input_schema["properties"]
+    assert "mutually exclusive" in index["rebuild_all"]["description"]
+    assert "at least 1" in index["batch"]["description"].lower()
+    assert 100 in index["batch"].get("examples", [])
 
 
 def test_markdown_link_resolver_supports_local_anchors(tmp_path: Path) -> None:

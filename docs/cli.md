@@ -3391,7 +3391,7 @@ doc3gpp server uninstall systemd
 
 The `listserv` group works with **public** ETSI LISTSERV archives on
 `https://list.etsi.org`. Sync and parse accept an exact public list ID, not a
-local allowlist. `RAN-WG1` and the TDoc IDs below are examples only.
+local allowlist. `3GPP_TSG_RAN_WG5` is the public RAN5 list, not an allowlist.
 `listserv list` reads the main-database catalog rather than upstream pages or
 only message rows. It prints tab-separated `list_id`, `tsg`, and `description`
 columns in ID order; null metadata is shown as `-`. The catalog includes
@@ -3401,17 +3401,18 @@ that do not yet have stored messages.
 ```bash
 # Sync message listings. Without --date, cover the rolling preceding calendar
 # year through today, inclusive; repeated filters intersect.
-doc3gpp listserv sync RAN-WG1
-doc3gpp listserv sync RAN-WG1 --date '>= 2026-10-01' --date '<= 2026-10-31'
+doc3gpp listserv sync 3GPP_TSG_RAN_WG5
+doc3gpp listserv sync 3GPP_TSG_RAN_WG5 --date '>= 2026-10-01' --date '<= 2026-10-31'
 
 # Parse already-synced messages separately; --force reparses existing details.
-doc3gpp listserv parse RAN-WG1 --date '>= 2026-10-01' --force
+doc3gpp listserv parse 3GPP_TSG_RAN_WG5 --date '>= 2026-10-01' --force
 
 # Stored-only reads and search modes (FTS, semantic, hybrid, filter-only).
 doc3gpp listserv list
-doc3gpp listserv search --list-id RAN-WG1 --tdocs R1-2610793 --format json
+doc3gpp listserv search --list-id 3GPP_TSG_RAN_WG5 --tdocs '%R1-2610793%' --format json
 doc3gpp listserv search --text 'handover' --semantic 'mobility procedure' --limit 10
-doc3gpp listserv show 'https://list.etsi.org/scripts/wa.exe?A2=RAN-WG1;2026-10-15;EXAMPLE' --format json
+# Replace the placeholder with an exact URL from a search result.
+doc3gpp listserv show '<exact-url-from-search>' --format json
 
 # Inspect or rebuild one/both derived indexes from SQL-stored records.
 doc3gpp listserv index
@@ -3430,6 +3431,8 @@ stored messages. Neither operation has an implicit read-time counterpart.
 `--format table|json`. `--text` selects FTS5, `--semantic` selects vector
 search, both select hybrid, and neither selects SQL filter-only search. Rich
 LIKE filters use the shared `%`/`_`, `!`, `null`, and `not-null` grammar.
+Stored TDoc ID fields are comma-delimited; use a contains pattern such as
+`%R1-2610793%` to match one ID within a multi-ID value.
 Unavailable FTS or semantic/vector dependencies return an actionable error,
 not an apparently successful empty result.
 

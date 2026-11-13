@@ -205,7 +205,7 @@ The shared registry adds these LISTSERV tools to both stdio and HTTP MCP:
 | `listserv_index_status` | No arguments; returns FTS/vector status |
 | `listserv_index_rebuild` | `rebuild`, `rebuild_embeddings`, `rebuild_all`, `batch`, `resume`, `stale_only`; enqueues index maintenance |
 
-The `RAN-WG1` example used in CLI/API documentation is not an ID whitelist.
+The public RAN5 list `3GPP_TSG_RAN_WG5` used in examples is not an ID whitelist.
 `listserv_list` returns the same ordered catalog payload as HTTP: `list_ids`
 remains for compatibility, while each `lists` item contains `list_id`, `tsg`,
 and `description`; nullable metadata is JSON `null`. The catalog includes seeded
@@ -217,6 +217,8 @@ Search returns the same serialized fields as HTTP, including `url`, `tdocs`,
 complete stored body only. MCP wraps each returned JSON string in its tool
 result, so compare the result text with HTTP JSON, not the protocol envelope.
 Semantic/vector availability errors remain explicit.
+For `tdocs`, stored IDs are comma-delimited; use a contains pattern such as
+`%R1-2610793%` to match one ID within a multi-ID value.
 
 Mutations reuse the existing queue. Enqueue results contain exactly `job_id`,
 `status`, `message`, and `links`; `links` contains the job-detail `self` link and
@@ -241,7 +243,7 @@ same argument names as the registered schema:
 result = await session.call_tool(
     "listserv_search",
     arguments={
-        "list_id": "RAN-WG1",
+        "list_id": "3GPP_TSG_RAN_WG5",
         "date": [">= 2026-10-01", "<= 2026-10-31"],
         "text": "handover",
         "limit": 10,
@@ -252,7 +254,7 @@ if result.isError:
 print(result.content[0].text)  # JSON text; the tool result wraps this payload.
 ```
 
-The example ID is illustrative only. Use `tools/list` for the live tool schema;
+Use `tools/list` for the live tool schema;
 the SDK/client connection setup is shown under [Python client example](#python-client-example).
 
 ## Jobs

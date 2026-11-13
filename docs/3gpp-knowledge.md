@@ -694,8 +694,8 @@ complete inventory.
 
 The archive importer reads public pages from the HTTPS LISTSERV host
 `list.etsi.org`. Sync accepts an exact list ID without a hardcoded vocabulary;
-IDs shown in examples (for example `RAN-WG1`) are illustrative, not an
-allowlist. The application's `listserv list` view reads a main-database
+the public RAN5 list `3GPP_TSG_RAN_WG5` is an example, not an allowlist.
+The application's `listserv list` view reads a main-database
 catalog: it includes maintained reference entries and IDs discovered by sync,
 not an exhaustive upstream enumeration. A new ID is added only after a
 successfully parsed page yields a message matching the requested date filters;

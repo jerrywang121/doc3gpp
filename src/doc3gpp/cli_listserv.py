@@ -88,26 +88,40 @@ def _run_batch(
     _report_batch(verb, result)
 
 
-_DATE_HELP = "Date filter expression (repeatable; intersected)."
+_DATE_HELP = (
+    "Date comparison: <op> YYYY-MM-DD or <op> 'YYYY-MM-DD' "
+    "(e.g. >= 2026-10-15); operators =, !=, <, <=, >, >=. "
+    "Repeatable; expressions intersect."
+)
+_RICH_FILTER_HELP = (
+    "Rich LIKE: % matches any number of characters; _ matches one character; "
+    "prefix ! to negate; 'null' matches SQL NULL; 'not-null' matches SQL NOT NULL; "
+    "plain values match exactly."
+)
+_TDOCS_FILTER_HELP = (
+    "For tdocs, null means no IDs (both subject and extracted fields NULL or empty); "
+    "not-null means at least one ID. Stored TDoc IDs are comma-delimited; use a "
+    "contains pattern such as %R1-2610793% to match an ID within a multi-ID value."
+)
 
 
 @listserv_app.command("sync")
 def listserv_sync(
-    list_id: str = typer.Argument(..., help="Exact LISTSERV list ID."),
+    list_id: str = typer.Argument(..., help="Exact LISTSERV list ID (e.g. 3GPP_TSG_RAN_WG5)."),
     date: list[str] | None = typer.Option(None, "--date", help=_DATE_HELP),  # noqa: B008
-    force: bool = typer.Option(False, "--force", "-f", help="Re-fetch covered periods."),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-fetch covered archive pages."),
 ) -> None:
-    """Sync archive message listings for one list."""
+    """Sync email items (metadata only) for one LISTSERV list."""
     _run_batch("sync", "build_listserv_sync_service", list_id, date, force)
 
 
 @listserv_app.command("parse")
 def listserv_parse(
-    list_id: str = typer.Argument(..., help="Exact LISTSERV list ID."),
+    list_id: str = typer.Argument(..., help="Exact LISTSERV list ID (e.g. 3GPP_TSG_RAN_WG5)."),
     date: list[str] | None = typer.Option(None, "--date", help=_DATE_HELP),  # noqa: B008
-    force: bool = typer.Option(False, "--force", "-f", help="Re-parse parsed messages."),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-parse selected email items even if already parsed."),
 ) -> None:
-    """Fetch and parse stored message details for one list."""
+    """Parse stored email items for one LISTSERV list."""
     _run_batch("parse", "build_listserv_parse_service", list_id, date, force)
 
 
@@ -132,17 +146,21 @@ def listserv_list() -> None:
 
 def listserv_search(
     date: list[str] | None = typer.Option(None, "--date", help=_DATE_HELP),  # noqa: B008
-    list_id: str | None = typer.Option(None, "--list-id", help="Restrict to a list ID."),
-    sender: str | None = typer.Option(None, "--from", help="Sender filter."),
-    subject: str | None = typer.Option(None, "--subject", help="Subject filter."),
-    tdocs: str | None = typer.Option(None, "--tdocs", help="TDoc ID filter."),
-    text: str | None = typer.Option(None, "--text", help="FTS5 text query."),
-    semantic: str | None = typer.Option(None, "--semantic", help="Semantic query."),
+    list_id: str | None = typer.Option(None, "--list-id", help=f"Rich LIKE filter on the stored list ID. {_RICH_FILTER_HELP}"),
+    sender: str | None = typer.Option(None, "--from", help=f"Rich LIKE filter on sender. {_RICH_FILTER_HELP}"),
+    subject: str | None = typer.Option(None, "--subject", help=f"Rich LIKE filter on subject. {_RICH_FILTER_HELP}"),
+    tdocs: str | None = typer.Option(
+        None,
+        "--tdocs",
+        help=f"Rich LIKE filter on TDoc IDs. {_RICH_FILTER_HELP} {_TDOCS_FILTER_HELP}",
+    ),
+    text: str | None = typer.Option(None, "--text", help='FTS5 MATCH query (e.g. "handover OR mobility").'),
+    semantic: str | None = typer.Option(None, "--semantic", help="Natural-language embedding query."),
     limit: int = typer.Option(20, "--limit", help="Maximum results (0-150)."),
-    offset: int = typer.Option(0, "--offset", help="Results to skip."),
+    offset: int = typer.Option(0, "--offset", help="Non-negative number of results to skip."),
     fmt: str = typer.Option("table", "--format", help="Output format: table or json."),
 ) -> None:
-    """Search stored LISTSERV messages (SQL/FTS5/semantic; never downloads)."""
+    """Search stored LISTSERV email items (SQL/FTS5/semantic; never downloads)."""
     from doc3gpp.models.listserv import ListservFilters, parse_date_set
     from doc3gpp.models.listserv_payloads import listserv_search_payload
     from doc3gpp.models.search import SearchError, SearchQueryError
@@ -190,10 +208,10 @@ def listserv_search(
 
 @listserv_app.command("show")
 def listserv_show(
-    url: str = typer.Argument(..., help="Stored LISTSERV message URL."),
+    url: str = typer.Argument(..., help="Exact URL returned by listserv_search for a stored email item; pass it unchanged."),
     fmt: str = typer.Option("table", "--format", help="Output format: table or json."),
 ) -> None:
-    """Show one stored message with all stored content."""
+    """Show one stored email item with its stored content."""
     from doc3gpp.models.listserv_payloads import listserv_record_payload
     from doc3gpp.services.factory import build_listserv_service
     from doc3gpp.services.listserv_service import ListservMessageNotFoundError
@@ -221,12 +239,12 @@ def listserv_show(
 @listserv_app.command("index")
 
 def listserv_index(
-    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild the FTS5 index."),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild the LISTSERV FTS5 index."),
     rebuild_embeddings: bool = typer.Option(
-        False, "--rebuild-embeddings", help="Rebuild the vector index."
+        False, "--rebuild-embeddings", help="Rebuild the LISTSERV vector index."
     ),
-    rebuild_all: bool = typer.Option(False, "--rebuild-all", help="Rebuild both indexes."),
-    batch: int | None = typer.Option(None, "--batch", min=1, help="Rebuild batch size."),
+    rebuild_all: bool = typer.Option(False, "--rebuild-all", help="Rebuild both indexes; mutually exclusive with --rebuild and --rebuild-embeddings."),
+    batch: int | None = typer.Option(None, "--batch", min=1, help="Batch size (at least 1)."),
     resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
     stale_only: bool = typer.Option(False, "--stale-only", help="Only rebuild stale rows."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress rebuild progress messages."),

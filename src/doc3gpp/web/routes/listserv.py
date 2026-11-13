@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from doc3gpp.models.index import IndexRequest
 from doc3gpp.models.jobs import Job, JobKind, JSONValue
@@ -43,6 +43,22 @@ from doc3gpp.web.templates_setup import templates
 from doc3gpp.web.workers.listserv_jobs import validate_batch_request
 
 router = APIRouter(prefix="/api/listserv", tags=["listserv"])
+
+_LISTSERV_DATE_HELP = (
+    "Date comparison: <op> YYYY-MM-DD or <op> 'YYYY-MM-DD' "
+    "(e.g. >= 2026-10-15); operators =, !=, <, <=, >, >=. "
+    "Repeatable; expressions intersect."
+)
+_LISTSERV_FILTER_HELP = (
+    "Rich LIKE: % matches any number of characters; _ matches one character; "
+    "prefix ! to negate; 'null' matches SQL NULL; 'not-null' matches SQL NOT NULL; "
+    "plain values match exactly."
+)
+_LISTSERV_TDOCS_FILTER_HELP = (
+    "For tdocs, null means no IDs (both subject and extracted fields NULL or empty); "
+    "not-null means at least one ID. Stored TDoc IDs are comma-delimited; use a "
+    "contains pattern such as %R1-2610793% to match an ID within a multi-ID value."
+)
 
 
 def _optional_search_filter(value: str | None) -> str | None:
@@ -133,38 +149,132 @@ def _queued(job: Job) -> JSONResponse:
 
 
 class _BatchBody(BaseModel):
-    list_id: str
-    dates: list[str] = []
-    force: bool = False
+    list_id: str = Field(
+        description="Exact public LISTSERV list ID (e.g. 3GPP_TSG_RAN_WG5).",
+        examples=["3GPP_TSG_RAN_WG5"],
+    )
+    dates: list[str] = Field(
+        default=[],
+        description=_LISTSERV_DATE_HELP,
+        examples=[[">= 2026-10-15", "<= 2026-10-21"]],
+    )
+    force: bool = Field(
+        default=False,
+        description=(
+            "When true, process selected email items even if sync reports the period "
+            "covered or a prior parse would normally cause them to be skipped."
+        ),
+        examples=[True],
+    )
 
 
 class _IndexBody(BaseModel):
-    rebuild: bool = False
-    rebuild_embeddings: bool = False
-    rebuild_all: bool = False
-    batch: int | None = None
-    resume: bool = False
-    stale_only: bool = False
+    rebuild: bool = Field(
+        default=False,
+        description="Rebuild the LISTSERV FTS5 full-text index.",
+        examples=[True],
+    )
+    rebuild_embeddings: bool = Field(
+        default=False,
+        description="Rebuild the LISTSERV vector embedding index.",
+        examples=[True],
+    )
+    rebuild_all: bool = Field(
+        default=False,
+        description=(
+            "Rebuild both indexes; mutually exclusive with rebuild and "
+            "rebuild_embeddings."
+        ),
+        examples=[True],
+    )
+    batch: int | None = Field(
+        default=None,
+        description="Positive rebuild batch size (at least 1).",
+        examples=[100],
+    )
+    resume: bool = Field(
+        default=False,
+        description="Resume an interrupted rebuild from its saved cursor.",
+        examples=[True],
+    )
+    stale_only: bool = Field(
+        default=False,
+        description="Rebuild only LISTSERV records considered stale.",
+        examples=[True],
+    )
 
 
-@router.get("/lists")
+@router.get(
+    "/lists",
+    summary="List registered LISTSERV lists",
+    description=(
+        "Return the locally stored LISTSERV catalog with list IDs, TSGs, and "
+        "descriptions; this does not fetch email items."
+    ),
+)
 def list_listserv_ids(
     service: ListservService = Depends(get_listserv_service),
 ) -> dict[str, Any]:
     return listserv_lists_payload(service.list_lists())
 
 
-@router.get("/search")
+@router.get(
+    "/search",
+    summary="Search stored LISTSERV email items",
+    description=(
+        "Search locally stored metadata and extracted content; this route never fetches "
+        "email items from ETSI. Repeated date expressions intersect."
+    ),
+)
 def search_listserv(
-    date: list[str] | None = Query(default=None),
-    list_id: str | None = Query(default=None),
-    sender: str | None = Query(default=None),
-    subject: str | None = Query(default=None),
-    tdocs: str | None = Query(default=None),
-    text: str | None = Query(default=None),
-    semantic: str | None = Query(default=None),
-    limit: int = Query(default=20),
-    offset: int = Query(default=0),
+    date: list[str] | None = Query(
+        default=None,
+        description=_LISTSERV_DATE_HELP,
+        examples=[[">= 2026-10-15"]],
+    ),
+    list_id: str | None = Query(
+        default=None,
+        description=f"Rich LIKE filter on the stored LISTSERV list ID. {_LISTSERV_FILTER_HELP}",
+        examples=["3GPP_TSG_RAN_WG5", "%RAN%"],
+    ),
+    sender: str | None = Query(
+        default=None,
+        description=f"Rich LIKE filter on the displayed sender. {_LISTSERV_FILTER_HELP}",
+        examples=["%john.doe%"],
+    ),
+    subject: str | None = Query(
+        default=None,
+        description=f"Rich LIKE filter on the subject. {_LISTSERV_FILTER_HELP}",
+        examples=["%handover%"],
+    ),
+    tdocs: str | None = Query(
+        default=None,
+        description=(
+            f"Rich LIKE filter on extracted TDoc IDs. "
+            f"{_LISTSERV_FILTER_HELP} {_LISTSERV_TDOCS_FILTER_HELP}"
+        ),
+        examples=["%R1-2610793%"],
+    ),
+    text: str | None = Query(
+        default=None,
+        description="FTS5 MATCH text query (e.g. handover OR mobility).",
+        examples=["handover OR mobility"],
+    ),
+    semantic: str | None = Query(
+        default=None,
+        description="Natural-language query for semantic search.",
+        examples=["handover enhancements"],
+    ),
+    limit: int = Query(
+        default=20,
+        description="Maximum number of results to return (0–150).",
+        examples=[20],
+    ),
+    offset: int = Query(
+        default=0,
+        description="Non-negative number of results to skip for pagination.",
+        examples=[0],
+    ),
     service: ListservSearchService = Depends(get_listserv_search_service),
 ) -> list[dict[str, Any]]:
     date_values = [value for value in (date or []) if value.strip()]
@@ -191,36 +301,72 @@ def search_listserv(
     return [listserv_search_payload(r) for r in results]
 
 
-@router.get("/show")
+@router.get(
+    "/show",
+    summary="Show one stored LISTSERV email item",
+    description="Return the stored email item identified by the exact URL from listserv_search; no upstream fetch occurs.",
+)
 def show_listserv_message(
-    url: str = Query(...),
+    url: str = Query(
+        ...,
+        description="Exact stored email-item URL returned by listserv_search; pass it unchanged.",
+    ),
     service: ListservService = Depends(get_listserv_service),
 ) -> dict[str, Any]:
     return listserv_record_payload(service.show(url))
 
 
-@router.get("/index/status")
+@router.get(
+    "/index/status",
+    summary="Get LISTSERV index status",
+    description="Return FTS5/vector index status without fetching email items or rebuilding either index.",
+)
 def listserv_index_status(
     service: ListservIndexService = Depends(get_listserv_index_service),
 ) -> dict[str, Any]:
     return service.status().to_dict()
 
 
-@router.post("/sync", status_code=202)
+@router.post(
+    "/sync",
+    status_code=202,
+    summary="Queue LISTSERV email-item sync",
+    description=(
+        "Enqueue metadata sync for one exact public LISTSERV list ID (e.g. 3GPP_TSG_RAN_WG5). "
+        "This fetches metadata for email items; parse extracts content. Date expressions "
+        "use the request body's dates field and intersect when repeated."
+    ),
+)
 def post_listserv_sync(
     body: _BatchBody, job_repo: JobRepository = Depends(get_job_repo)
 ) -> JSONResponse:
     return _queued(enqueue_listserv_sync(job_repo, body.list_id, body.dates, body.force))
 
 
-@router.post("/parse", status_code=202)
+@router.post(
+    "/parse",
+    status_code=202,
+    summary="Queue LISTSERV email-item parsing",
+    description=(
+        "Enqueue parsing of stored email items for one exact public LISTSERV list ID. "
+        "Dates use the request body's dates field; repeated comparisons intersect."
+    ),
+)
 def post_listserv_parse(
     body: _BatchBody, job_repo: JobRepository = Depends(get_job_repo)
 ) -> JSONResponse:
     return _queued(enqueue_listserv_parse(job_repo, body.list_id, body.dates, body.force))
 
 
-@router.post("/index", status_code=202)
+@router.post(
+    "/index",
+    status_code=202,
+    summary="Queue LISTSERV index maintenance",
+    description=(
+        "Enqueue FTS5/vector index maintenance for stored email items. rebuild_all "
+        "rebuilds both indexes and is mutually exclusive with the individual rebuild flags."
+    ),
+)
 def post_listserv_index(
     body: _IndexBody, job_repo: JobRepository = Depends(get_job_repo)
 ) -> JSONResponse:

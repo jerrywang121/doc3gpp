@@ -230,16 +230,18 @@ SDK payload serializers; they do not sync, parse, or fetch ETSI content.
 | `GET /api/listserv/search` | Query: repeatable `date`; `list_id`, `sender`, `subject`, `tdocs`, `text`, `semantic`, `limit` (default 20, 0–150), `offset` (default 0); response is a bare array of search payloads |
 | `GET /api/listserv/show?url=...` | Required exact stored message detail URL; response is the full stored-record payload |
 | `GET /api/listserv/index/status` | Independent FTS/vector `IndexStatus` JSON; no upstream request |
-| `POST /api/listserv/sync` | JSON `{"list_id":"RAN-WG1","dates":[">= 2026-10-01"],"force":false}` |
+| `POST /api/listserv/sync` | JSON `{"list_id":"3GPP_TSG_RAN_WG5","dates":[">= 2026-10-01"],"force":false}` |
 | `POST /api/listserv/parse` | Same JSON fields; parse operates on already-synced messages |
 | `POST /api/listserv/index` | `rebuild`, `rebuild_embeddings`, `rebuild_all`, optional positive `batch`, `resume`, `stale_only` |
 
-The example ID is illustrative only; any valid public LISTSERV list ID can be
+The example ID is the public RAN5 list; any valid public LISTSERV list ID can be
 supplied. `dates` is a list of displayed-calendar-date comparisons; sync and
 parse require one exact list ID. Accepted mutations return HTTP 202 with a
 queued job envelope. Their job kinds are `listserv_sync`, `listserv_parse`, and
 `listserv_index`. The general
 [monitor/cancel API](#monitor-and-cancel) applies.
+For `tdocs`, stored IDs are comma-delimited; use a contains pattern such as
+`%R1-2610793%` to match one ID within a multi-ID value.
 
 The list response reads the main-database catalog and uses the same serializer
 as MCP. `lists` is ordered by `list_id`; each record has `list_id`, nullable
@@ -272,16 +274,17 @@ characters; neither show nor search can recover text discarded before storage.
 The CLI, HTTP, and MCP read surfaces use these same JSON payload builders. See
 [sync/parse/index details](processes.md#listserv-archive-flow).
 
-Examples:
+Examples (replace the `show` placeholder with the exact URL from a search result):
 
 ```bash
 curl 'http://127.0.0.1:13999/api/listserv/lists'
-curl 'http://127.0.0.1:13999/api/listserv/search?list_id=RAN-WG1&date=%3E%3D%202026-10-01'
+curl 'http://127.0.0.1:13999/api/listserv/search?list_id=3GPP_TSG_RAN_WG5&date=%3E%3D%202026-10-01'
+curl 'http://127.0.0.1:13999/api/listserv/search?tdocs=%25R1-2610793%25'
 curl --get 'http://127.0.0.1:13999/api/listserv/show' \
-  --data-urlencode 'url=https://list.etsi.org/scripts/wa.exe?A2=RAN-WG1;2026-10-15;EXAMPLE'
+  --data-urlencode 'url=<exact-url-from-search>'
 curl -X POST 'http://127.0.0.1:13999/api/listserv/sync' \
   -H 'Content-Type: application/json' \
-  -d '{"list_id":"RAN-WG1","dates":[">= 2026-10-01","<= 2026-10-31"],"force":false}'
+  -d '{"list_id":"3GPP_TSG_RAN_WG5","dates":[">= 2026-10-01","<= 2026-10-31"],"force":false}'
 ```
 
 Search, status, and detail routes are SQL-only. Semantic/hybrid requests can

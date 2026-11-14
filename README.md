@@ -6,6 +6,36 @@ ETSI LISTSERV email archives.
 Store source metadata in SQL, extract Word and presentation content, and use
 the same services through the CLI, web UI, HTTP API, or MCP tools.
 
+## What's New
+
+- **Nov 14:** **Revision TDoc discovery:** Recursively discover
+  meeting revision files.
+- **Nov 12–13:** **LISTSERV email archives support:** Discover public ETSI lists, sync message
+  listings, parse individual messages, and search stored content. See the
+  [LISTSERV guide](docs/processes.md#listserv-archive-flow).
+- **Oct 22–Nov 5:** **Richer TDoc extraction:** Extract multi-file CR, WID, LS,
+  and discussion archives, including Word and presentation files; inspect ZIP
+  inventories and matched-document provenance. See
+  [TDoc parsing](docs/processes.md#tdoc-parsing).
+- **Oct 19–28:** **Faster parsing:** Bounded parallel preparation and shared
+  Office conversion workers accelerate TDoc and specification-document processing. See
+  [pools and background jobs](docs/processes.md#pools-and-background-jobs).
+- **Sep 22–27:** **Unified search:** Use text, semantic, hybrid, or filter-only
+  search with source-aware results and configurable OpenAI-compatible embeddings. See
+  [querying](docs/processes.md#querying) and
+  [semantic search configuration](docs/config.md#semantic-and-hybrid-search).
+- **Sep 23–25:** **Specification support:** Parse versioned documents, browse
+  their contents, and search section- and table-aware chunks. See
+  [specification-document parsing](docs/processes.md#specification-document-parsing).
+- **Sep 13:** **Agent and schema tools:** Connect over local MCP stdio,
+  install the packaged agent skill, and inspect resource schemas via CLI, HTTP,
+  or MCP. See
+  [MCP connections](docs/mcp.md#connect) and
+  [schema commands](docs/cli.md#doc3gpp-tdoc-schema).
+- **Sep 11–12:** **RAN5 testcases support:** Sync, list, and inspect testcase status
+  snapshots using the CLI, web UI, or MCP. See
+  [testcase commands](docs/cli.md#testcase-commands).
+
 ## Install
 
 Requires **Python 3.10+** and [uv](https://docs.astral.sh/uv/).

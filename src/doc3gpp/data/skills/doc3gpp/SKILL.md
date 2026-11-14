@@ -42,17 +42,30 @@ Check returned ownership and scope before restricting searches to one WG.
 Use returned WI/SI identifiers to connect specifications, meetings, and TDocs.
 Do not assume administrative TDocs contain WI/SI metadata.
 
-### Meetings, TDocs, CRs, and specification versions
+### Meetings, TDocs, CRs
 
 WGs generally hold quarterly meetings, with TDocs submitted for each meeting.
 Some WGs also hold a `bis` meeting between quarterly meetings.
 Check `list_meetings` and `get_meeting` for actual dates and FTP locations.
 
-TDocs are contributions submitted to a WG meeting. There are many types of TDocs, including discussion, LS (liaison statement), WI status reports, CR (change request), etc. 
+TDocs are contributions submitted to a WG meeting. There are many types of TDocs, including discussion, LS (liaison statement), WI status reports, CR (change request), etc.
+
 Each TDoc is identified by a unique document number, in the format `WG-YYNNNNN`, where `WG` is the working group acronym, `YY` is the last two digits of the year, and `NNNNN` is a 6-7 digit sequential number. e.g `R1-23012345`, `S3-2301234`.
-RAN5 TTCN CR TDoc has prefix `R5s`, e,g, `R5s2301234`. 
-RAN5 TTCN Workshop TDocs have prefix `R5w`, e.g, `R5w2301234`.
 TSG Plenary packages have the form `RP-`, `SP-`, or `CP-` depending on the TSG, as mentioned later in the text.
+
+TDoc generally has life-cycle:
+
+```text
+draft -> published [●available] -> revision -> revision published [●available] (on TDoc ID)
+                        |                                               |
+                        |                                               v
+                        `------> [ ✔agreed | ✔noted | ➜postpone| ✘rejected | ✘withdraw ]
+```
+
+All published TDocs are available on 3GPP FTP website.
+A TDoc's draft and revision files may or may not be publicly available.
+
+### Specification Versions
 
 A Change Request (CR) TDoc proposes changes to one specification at a specific release and version. e.g. v18.10.0 for Rel-18, main version 10, minor version 0.
 WG-agreed CRs form packages for approval at the quarterly TSG plenary.
@@ -61,10 +74,11 @@ Packages group CRs by specification, release/version, and WI.
 Specification main versions advance after the meeting cycle incorporates approved plenary packages. e.g. v18.1.0 -> v18.2.0. The minor version increments for minor correction after the meeting, e.g. agreed CRs missed during implementation, or editorial changes.
 A new release of a spec are created after incorporated a CR associated with a WI of later release.
 A spec maintains multiple releases in parallel, with each release advancing its own set of main and minor versions.
+
 Exception is RAN5 test specs, where each of their testcase has it own release applicability. The spec release advances when testcases of new release feature are incorporated. Old releases of the same spec become obsolete.
 Check stored spec versions and their associated CRs rather than assuming every meeting changes every specification.
 
-### Special RAN5 TTCN meetings
+### RAN5 TTCN meetings
 
 The yearly RAN5 TTCN email meeting spans approximately week#50 of the previous year through week#50 of its named year.
 TTCN CR TDocs target a test suite and a specific TTCN release, identified as `YYwk##`.
@@ -73,12 +87,17 @@ TTCN test suites release normally are updated two to three weeks after a quarter
 RAN5 TTCN Workshops meeting discuss TTCN test models, typically four to six times per year.
 Search email meetings and workshops separately from regular RAN5 meetings.
 
+RAN5 TTCN CR TDoc has prefix `R5s`, e,g, `R5s2301234`.
+A TTCN CR noramlly have review (MCC160Comment), and may have support documents (e.g. draft prose CR).
+Both review and support docs are published on 3GPP ftp site, associated to the original TDoc ID.
+RAN5 TTCN Workshop TDocs have prefix `R5w`, e.g, `R5w2301234`.
+
 ### LISTSERV email list
 
 The 3GPP uses ETSI LISTSERV public email list for offline communication.
 Especially during meeting periods (a couple of weeks before, during, and
 after a meeting), the LISTSERV list is used for annoucing TDoc revisions,
-merging, or directly discussing changes.
+merging, or direct change discussions.
 
 Many list IDs indicate which TSG or WG they belong to, e.g.:
 `3GPP_TSG_RAN` for RAN planery (`RP`); `3GPP_TSG_RAN_WG5` for RAN5 (`R5`);
@@ -144,18 +163,16 @@ An individual annex conversion failure instead appears in `skipped_sources` in `
 
 `parse_tdocs` (or `doc3gpp tdoc parse --tdoc <id>`) parses only the main ZIP in `tdocs.ftp_url`.
 It does not automatically parse separate TDoc revisions, MCC review or supporting ZIPs.
-Examples include MCC160 review comments and supporting prose draft CRs, and TDoc revisions.
+Examples include MCC160 review comments and supporting prose draft CRs, and TDoc draft or revisions.
 
-Associated documents can be outside the main TDoc ZIP and absent from the meeting's TDoc list.
-TDoc revisions during a meeting often reside in the meeting FTP location's `inbox` subfolder, with suffix `r1`, `r2`, etc.
 TTCN MCC reviews and supporting prose draft CRs can reside in its `review` subfolder.
-Registered associated files appear in `get_tdoc` details or the CLI `tdoc show` Files section.
+Registered associated ZIP, Word, and presentation files appear in `get_tdoc` details or the CLI `tdoc show` Files section.
 Use returned URLs rather than constructing filenames from these folder conventions.
 
 To parse and inspect a separate revision, review, or supporting ZIP:
 
 1. Call `get_tdoc({"tdoc_id":"R5s261234"})` (or run `doc3gpp tdoc show --tdoc R5s261234`).
-2. Find the target attachment entry in `files` (`type`: `review`, `support`, or `revision`).
+2. Find the target ZIP entry in `files` (`type`: `review`, `support`, `revision`, or `draft`).
 3. Copy its `ftp_url` and build the canonical `https://www.3gpp.org/ftp/<ftp_url>` URL when needed.
 4. Parse that exact URL with `parse_tdoc_url`:
    ```text
@@ -229,6 +246,9 @@ This SQL-only read does not download or parse; a missing presentation requires a
 Search returns chunks, not necessarily a complete source file.
 
 ### RAN5 testcases
+
+RAN5 defines testcases for device conformance, and maintains (by MCCTF160) testcase implementation
+in TTCN testsuites, authorises testcase verification status.
 
 1. Use `list_testcases` with `testcase` (ID pattern), `title`, `spec`, `group`, `status` (TTCN), or `gcf_status` (GCF/PTCRB).
 2. Use `sync_testcases({})` to fetch and parse the latest RAN5 status snapshot in one job.

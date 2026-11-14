@@ -11,7 +11,7 @@ the same record from the same six repository reads:
 * ``tdoc_extracts`` — the cache-extract metadata sidecar, keyed by the
   parent TDoc's ``ftp_url``. The web / CLI renderers lift the
   ``extracted_at`` timestamp out of this row.
-* ``tdoc_files`` — auxiliary revisions / reviews / support files,
+* ``tdoc_files`` — auxiliary revisions / drafts / reviews / support files,
   keyed by ``tdoc_id``.
 * ``tdoc_zip_inventory`` — ordered outer-ZIP member names keyed by URL.
 

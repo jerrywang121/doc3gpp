@@ -602,6 +602,7 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
         tdoc_list_sync_interval=settings.sync.tdoc_list_sync_interval,
         tdoc_list_closed_window=settings.sync.tdoc_list_closed_window,
         tdoc_list_url_template=settings.sync.tdoc_list_url_template,
+        tdoc_ftp_max_depth=settings.sync.tdoc_ftp_max_depth,
     )
 
 

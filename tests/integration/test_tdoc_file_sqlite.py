@@ -307,7 +307,7 @@ def test_service_sync_writes_files_to_repository(sqlite_env, monkeypatch) -> Non
         ]
     )
 
-    def fake_fetch(ftp_url, tdoc_ids):
+    def fake_fetch(ftp_url, tdoc_ids, **kwargs):
         return [
             TDocFile(
                 tdoc_id="R5s260001", type="revision",
@@ -378,7 +378,7 @@ def test_coordinator_sync_persists_tdocs_and_files(sqlite_env, monkeypatch) -> N
                 # agenda opening TDoc) so the Inbox listing attaches a
                 # matching revision here.
                 return (
-                    '<a class="file" href="https://x/R5-261700r1.zip">'
+                    '<a class="file" href="R5-261700r1.zip">'
                     "R5-261700r1.zip</a>"
                 )
             if url.rstrip("/").endswith(
@@ -417,6 +417,73 @@ def test_coordinator_sync_persists_tdocs_and_files(sqlite_env, monkeypatch) -> N
     assert all(f.tdoc_id in meeting_tdoc_ids for f in tdoc_files)
     assert outcome.status == "synced"
     assert "TDoc sync complete:" in outcome.reason
+
+
+def test_factory_sync_discovers_nested_files_and_preserves_old_rows(sqlite_env, tmp_path, monkeypatch) -> None:
+    from doc3gpp.config import get_settings
+    from doc3gpp.models.tsg import Tsg
+    from doc3gpp.services.factory import build_tdoc_sync_coordinator
+    from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
+
+    config = tmp_path / "config.toml"
+    config.write_text("[sync]\ntdoc_ftp_max_depth = 2\n", encoding="utf-8")
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config))
+    get_settings.cache_clear()
+    create_schema()
+    SQLAlchemyTsgRepository().upsert_many(
+        [Tsg(tsg_name="RAN WG5", short_name="R5", description="RAN5")]
+    )
+    SQLAlchemyMeetingRepository().upsert_many([
+        Meeting(
+            meeting_id=1, name="RAN5#111", title="", location="",
+            start_date=date(2026, 6, 1), end_date=date(2026, 6, 2),
+            tsg="R5", ftp_url="tsg_ran/wg5/meeting/",
+        )
+    ])
+    xlsx_bytes = Path("tests/fixtures/tdoc_xlsx/TDoc_List_Meeting_RAN5#111.xlsx").read_bytes()
+    requested: list[str] = []
+    pages = {
+        "inbox/": '<a href="drafts/">drafts</a>',
+        "inbox/drafts/": (
+            '<a class="file" href="Draft%20R5-261700.docx">Draft R5-261700.docx</a>'
+            '<a class="file" href="REV%20R5-261700.pptx">REV R5-261700.pptx</a>'
+            '<a href="deeper/">deeper</a>'
+        ),
+        "inbox/drafts/deeper/": '<a class="file" href="R5-261700r2.zip">revision</a>',
+    }
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def get_text(self, url: str) -> str:
+            requested.append(url)
+            return pages.get(url.split("/meeting/", 1)[1], "")
+
+        def get_bytes(self, url: str) -> bytes:
+            assert "GenerateDocumentList.aspx?meetingId=1" in url
+            return xlsx_bytes
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("doc3gpp.scraping.ftp_source.ScraperClient", FakeClient)
+    monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", FakeClient)
+    coordinator = build_tdoc_sync_coordinator()
+    assert coordinator.sync_for_meeting_id(1).status == "synced"
+    repo = SQLAlchemyTDocFileRepository()
+    assert {(f.tdoc_id, f.file, f.type) for f in repo.list()} == {
+        ("R5-261700", "Draft R5-261700.docx", "draft"),
+        ("R5-261700", "REV R5-261700.pptx", "revision"),
+    }
+    assert not any("deeper" in url for url in requested)
+
+    pages["inbox/drafts/"] = ''
+    assert coordinator.sync_for_meeting_id(1, force=True).status == "synced"
+    assert len(repo.list()) == 2
 
 
 # ---------------------------------------------------------------------------

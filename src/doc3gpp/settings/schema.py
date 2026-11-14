@@ -409,6 +409,11 @@ class SyncSettings(BaseModel):
         default=timedelta(days=90),
         description="Meetings whose end date is older than this window are skipped.",
     )
+    tdoc_ftp_max_depth: int = Field(
+        default=4,
+        ge=0,
+        description="Maximum meeting-relative directory depth for auxiliary FTP file scans.",
+    )
     tdoc_list_url_template: str = Field(
         default="https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}",
         description=(

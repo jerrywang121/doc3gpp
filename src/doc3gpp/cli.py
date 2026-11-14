@@ -3298,7 +3298,7 @@ def _render_tdoc_show_json(
       under ``cover`` / ``ttcn`` because both detail rows no longer
       carry their own timestamps after the slimming.
     - ``files``: array of every :class:`TDocFile` row matching
-      ``tdoc_id`` (auxiliary revisions / reviews / support files).
+      ``tdoc_id`` (auxiliary revisions / drafts / reviews / support files).
       Every dataclass field of :class:`TDocFile` is serialised. The
       key is **omitted** when the TDoc has no auxiliary files, so the
       JSON stays dense for hits and sparse for misses.

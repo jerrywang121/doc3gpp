@@ -30,16 +30,19 @@ class TDocFileService:
         ftp_url: str,
         tdoc_ids: Iterable[str] | None = None,
         on_progress: Callable[[str], None] | None = None,
+        *,
+        tsg: str | None = None,
+        max_depth: int = 4,
     ) -> int:
         """Fetch auxiliary TDoc files from the meeting FTP and persist them.
 
         Args:
             ftp_url: The meeting's stored FTP URL.
             tdoc_ids: Iterable of TDoc IDs to scope the scan. Files that
-                do not start with any of these IDs are dropped by the
-                parser. ``None`` or an empty iterable is a no-op (the
-                parser cannot recognise files without a known prefix to
-                match against).
+                do not contain a matching ID are dropped by the parser.
+                ``None`` or an empty iterable is a no-op.
+            tsg: Meeting group; inferred only when IDs have one group if absent.
+            max_depth: Maximum directory depth relative to the meeting root.
 
         Returns:
             The number of TDocFile rows written (insert or update).
@@ -56,7 +59,7 @@ class TDocFileService:
             ftp_url,
             len(ids),
         )
-        files = fetch_tdoc_files_from_meeting_ftp(ftp_url, ids)
+        files = fetch_tdoc_files_from_meeting_ftp(ftp_url, ids, tsg=tsg, max_depth=max_depth)
         if not files:
             logger.info("No auxiliary TDoc files found under %s", ftp_url)
             return 0

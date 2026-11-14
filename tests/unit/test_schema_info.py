@@ -154,7 +154,7 @@ def test_tdoc_categoricals() -> None:
     payload = schema_payload("tdoc")
     by_table_field = {(r["table"], r["field"]): r for r in payload}
     assert by_table_field[("tdoc_cr_cover_page", "cr_cat")]["values"] == "F,B,A,C,D"
-    assert by_table_field[("tdoc_files", "type")]["values"] == "revision,review,support"
+    assert by_table_field[("tdoc_files", "type")]["values"] == "revision,draft,review,support"
     assert by_table_field[("tdocs", "status")]["values"] == "-"
     assert by_table_field[("tdoc_cr_ttcn_details", "required_changes")]["type"] == "gzip-json"
 
@@ -288,12 +288,7 @@ def test_categoricals_match_canonical_constants() -> None:
     assert by_table[("tsgs", "short_name")].values == tuple(t.short_name for t in default_tsgs())
     assert by_table[("testcases", "group")].values == tuple(VALID_TESTCASE_GROUPS)
     assert by_table[("testcase_status", "path")].values == tuple(_PATH_RANK)
-    # Brief verbatim was `...values == tuple(sorted(TDocFileTypes))`, but
-    # sorted(TDocFileTypes) is ("review", "revision", "support") ("review" <
-    # "revision": 'e' < 's' at index 4) while the registry (and Task 2's
-    # locked "revision,review,support" payload) uses logical order
-    # ("revision", "review", "support"). Compare sorted-vs-sorted so the
-    # test still locks set equality without forcing alphabetical output.
+    # Compare as sets while preserving the schema's logical output order.
     assert sorted(by_table[("tdoc_files", "type")].values or ()) == sorted(TDocFileTypes)
 
 
@@ -377,4 +372,3 @@ def test_default_config_example_has_content_chunk_cap() -> None:
     from doc3gpp.settings.config_writer import load_default_template
 
     assert "# max_content_chunks_per_tdoc = 16" in load_default_template()
-

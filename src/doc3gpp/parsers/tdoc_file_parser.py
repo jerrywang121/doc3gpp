@@ -1,6 +1,6 @@
 """Parser for 3GPP FTP directory listings.
 
-Extracts auxiliary TDoc files (revisions, reviews, support docs) from a
+Extracts auxiliary TDoc files (revisions, drafts, reviews, support docs) from a
 3GPP FTP directory listing page. The parser is pure: it takes the raw
 HTML and a set of known TDoc IDs, and returns a list of
 :class:`TDocFile` domain objects. URL construction and HTTP retrieval
@@ -9,7 +9,7 @@ live in :mod:`doc3gpp.scraping.ftp_source`.
 The 3GPP FTP server renders directory listings as an ASP.NET page. File
 links carry the ``class="file"`` attribute; subfolder links do not, so
 the parser filters on that class to skip ``Inbox/``, ``Docs/``,
-``Tdocs/`` and ``Review/`` navigation entries.
+``tdoc/`` and ``Review/`` navigation entries.
 
 Each file row is rendered as a ``<tr>`` whose second ``<td>`` after the
 checkbox/icon prefix carries the ``Last Modified`` column. That date is
@@ -25,12 +25,14 @@ import logging
 import re
 from collections.abc import Iterable
 from datetime import date, datetime
-from urllib.parse import urljoin
+from functools import lru_cache
+from urllib.parse import unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
 from doc3gpp.models.tdoc_file import (
     TDocFile,
+    TDocFileTypeDraft,
     TDocFileTypeReview,
     TDocFileTypeRevision,
     TDocFileTypeSupport,
@@ -39,85 +41,52 @@ from doc3gpp.parsers.normalizers import normalize_ftp_path
 
 logger = logging.getLogger(__name__)
 
-_RE_REVISION_SUFFIX = re.compile(r"^r\d+$", re.IGNORECASE)
-_RE_REVIEW_SUFFIX = re.compile(r"^_MCC160Comments(_r\d+)?$", re.IGNORECASE)
-_ZIP_SUFFIX = ".zip"
+_FILE_SUFFIXES = (".zip", ".doc", ".docx", ".ppt", ".pptx")
 _FTP_DATE_FORMAT = "%Y/%m/%d %H:%M"
 
 
 def classify_tdoc_filename(
     filename: str,
     tdoc_ids: Iterable[str],
+    *,
+    folder: str = "inbox",
 ) -> tuple[str, str] | None:
-    """Classify ``filename`` as an auxiliary file for a known TDoc.
+    """Match the first known ID anywhere in a filename and classify by root."""
+    ids = tuple(sorted({tid for tid in tdoc_ids if tid}, key=lambda x: (-len(x), x)))
+    return _classify(filename, ids, folder)
 
-    The match logic finds the longest known TDoc ID that prefixes the
-    filename (longest-first iteration disambiguates cases like
-    ``R5s260001`` vs. ``R5s2600012``) and inspects the remainder to
-    determine the file type.
 
-    Once a TDoc ID prefix matches, the remainder is dispatched into
-    exactly one of four outcomes:
-
-    1. **base TDoc (skip)** — the filename equals ``{tdoc_id}.zip``
-       with no extra suffix (e.g. ``R5-261719.zip``). These are the
-       official TDoc ZIPs already stored on the ``tdocs`` table, so
-       they are not modelled here.
-    2. **revision** — suffix matches ``r\\d+`` (e.g.
-       ``R5-261719r1.zip``). A renamed revision of the base TDoc.
-    3. **review** — suffix matches ``_MCC160Comments`` or
-       ``_MCC160Comments_r\\d+`` (e.g. ``R5s250008_MCC160Comments.zip``,
-       ``R5s250009_MCC160Comments_r1.zip``). A TTCN CR review document
-       produced for the base TDoc; only exists for TTCN email meetings.
-    4. **support** — any other suffix that starts with ``_`` (e.g.
-       ``R5s250009_R5-25xxxx_38.508-1_NRCA_interband_BWs.zip``). A
-       supporting draft or other attachment routed through the same
-       meeting folder as the base TDoc.
-
-    Returns a ``(tdoc_id, file_type)`` tuple for outcomes 2–4, or
-    ``None`` for the base TDoc and for files that are not ``.zip``,
-    do not match any ``tdoc_id``, or have a suffix that fits none of
-    the recognised patterns.
-    """
-    if not filename:
+@lru_cache(maxsize=8)
+def _id_pattern(ids: tuple[str, ...]) -> re.Pattern[str] | None:
+    if not ids:
         return None
-    if not filename.lower().endswith(_ZIP_SUFFIX):
+    return re.compile("(?:" + "|".join(map(re.escape, ids)) + r")(?!\d)", re.IGNORECASE)
+
+
+def _classify(filename: str, ids: tuple[str, ...], folder: str) -> tuple[str, str] | None:
+    if not filename.lower().endswith(_FILE_SUFFIXES):
         return None
-
-    name = filename[: -len(_ZIP_SUFFIX)]
-    if not name:
+    pattern = _id_pattern(ids)
+    match = pattern.search(filename) if pattern else None
+    if match is None:
         return None
-
-    name_lower = name.lower()
-    matching_id: str | None = None
-    suffix = ""
-    for tid in sorted({tid for tid in tdoc_ids if tid}, key=len, reverse=True):
-        tid_lower = tid.lower()
-        if not name_lower.startswith(tid_lower):
-            continue
-        suffix = name[len(tid):]
-        if not suffix:
-            # {tdoc_id}.zip — base TDoc itself; skip auxiliary modelling.
-            return None
-        matching_id = tid
-        break
-
-    if matching_id is None:
+    matching_id = next(tid for tid in ids if tid.casefold() == match.group().casefold())
+    if filename.casefold() == f"{matching_id}.zip".casefold():
         return None
-
-    if _RE_REVISION_SUFFIX.match(suffix):
-        return matching_id, TDocFileTypeRevision
-    if _RE_REVIEW_SUFFIX.match(suffix):
-        return matching_id, TDocFileTypeReview
-    if suffix.startswith("_"):
-        return matching_id, TDocFileTypeSupport
-    return None
+    if folder.casefold() == "review":
+        kind = TDocFileTypeReview if "mcc160comment" in filename.casefold() else TDocFileTypeSupport
+    else:
+        kind = TDocFileTypeDraft if filename.casefold().startswith("draft") else TDocFileTypeRevision
+    return matching_id, kind
 
 
 def parse_tdoc_files_from_listing(
     html: str,
     base_url: str,
     tdoc_ids: Iterable[str],
+    *,
+    folder: str = "inbox",
+    restrict_to_directory: bool = False,
 ) -> list[TDocFile]:
     """Extract :class:`TDocFile` records from a 3GPP FTP directory listing.
 
@@ -127,26 +96,31 @@ def parse_tdoc_files_from_listing(
         base_url: Fully-qualified base URL of the directory being listed
             (used to resolve relative hrefs into absolute URLs).
         tdoc_ids: Iterable of TDoc IDs known to the local database.
-            Files that do not start with any of these IDs are dropped.
+            Files that do not contain any of these IDs are dropped.
+        folder: Top-level meeting subtree used for classification.
+        restrict_to_directory: Accept only direct, same-host children of base_url.
 
     Returns:
         A list of :class:`TDocFile` records, one per recognised file.
         Unrecognised files, subfolder navigation entries, and the base
         TDoc ZIP for each TDoc are silently skipped.
     """
-    if not tdoc_ids:
+    ids = tuple(sorted({tid for tid in tdoc_ids if tid}, key=lambda x: (-len(x), x)))
+    if not ids:
         return []
 
     soup = BeautifulSoup(html, "lxml")
     results: list[TDocFile] = []
     for anchor in soup.find_all("a", class_="file", href=True):
         href = anchor["href"]
-        filename = anchor.get_text(strip=True) or href.rsplit("/", 1)[-1]
-        classification = classify_tdoc_filename(filename, tdoc_ids)
+        filename = anchor.get_text(strip=True) or unquote(href.rsplit("/", 1)[-1])
+        classification = _classify(filename, ids, folder)
         if classification is None:
             continue
         tdoc_id, file_type = classification
         absolute_url = urljoin(base_url, href)
+        if restrict_to_directory and not _is_direct_child(absolute_url, base_url):
+            continue
         results.append(
             TDocFile(
                 tdoc_id=tdoc_id,
@@ -156,6 +130,49 @@ def parse_tdoc_files_from_listing(
                 uploaded_date=_extract_uploaded_date(anchor),
             )
         )
+    return results
+
+
+def _is_direct_child(url: str, base_url: str) -> bool:
+    parsed = urlsplit(url)
+    current = urlsplit(base_url)
+    if parsed.scheme != current.scheme or parsed.netloc.lower() != current.netloc.lower():
+        return False
+    if parsed.query or parsed.fragment:
+        return False
+    path, current_path = parsed.path, current.path
+    while True:
+        path, current_path = unquote(path), unquote(current_path)
+        if "\\" in path or any(part in (".", "..") for part in path.split("/")):
+            return False
+        parent = current_path.rstrip("/") + "/"
+        if not path.casefold().startswith(parent.casefold()):
+            return False
+        child = path[len(parent):].strip("/")
+        if not child or "/" in child:
+            return False
+        if unquote(path) == path and unquote(current_path) == current_path:
+            return True
+
+
+def parse_tdoc_subfolders(html: str, base_url: str) -> list[str]:
+    """Return direct, same-host folder children from a 3GPP listing."""
+    soup = BeautifulSoup(html, "lxml")
+    results: list[str] = []
+    for anchor in soup.find_all("a", href=True):
+        if "file" in (anchor.get("class") or []):
+            continue
+        href = str(anchor["href"])
+        absolute = urljoin(base_url, href)
+        if not _is_direct_child(absolute, base_url):
+            continue
+        child = unquote(urlsplit(absolute).path).rstrip("/").rsplit("/", 1)[-1]
+        row = anchor.find_parent("tr")
+        icon = row.find("img", class_="icon") if row else None
+        has_folder_icon = icon is not None and str(icon.get("src", "")).endswith("?file=")
+        if not href.endswith("/") and not has_folder_icon and "." in child:
+            continue
+        results.append(absolute.rstrip("/") + "/")
     return results
 
 

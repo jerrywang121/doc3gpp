@@ -123,6 +123,7 @@ Under `[sync]`:
 | `tdoc_list_sync_interval` | `"30m"` | Per-meeting TDoc-list interval |
 | `tdoc_list_closed_window` | `"90d"` | Stop refreshing previously synced old meetings |
 | `tdoc_list_url_template` | `https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}` | TDoc list export URL |
+| `tdoc_ftp_max_depth` | `4` | Maximum auxiliary-file directory depth relative to the meeting root; `0` disables scanning |
 
 Durations accept human forms such as `30m`, `24h`, `90d`, or ISO 8601 durations.
 Exact skip order, first-sync exceptions, and force behavior are in

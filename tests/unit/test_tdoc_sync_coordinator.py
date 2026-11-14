@@ -277,7 +277,7 @@ def test_sync_chains_into_tdoc_file_service(monkeypatch) -> None:
 
     captured: dict = {}
 
-    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None, **kwargs):
         captured["ftp_url"] = ftp_url
         captured["tdoc_ids"] = list(tdoc_ids)
         return 4
@@ -322,7 +322,7 @@ def test_file_sync_receives_no_tdoc_ids_when_tdoc_sync_writes_none(
 
     captured: dict = {}
 
-    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None, **kwargs):
         captured["tdoc_ids"] = list(tdoc_ids)
         return 0
 
@@ -557,7 +557,7 @@ def test_sync_runs_tdoc_list_even_when_meeting_has_no_ftp_url(
         )
         return 1
 
-    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None, **kwargs):
         captured["file_sync_called"] = True
         captured["file_sync_ftp_url"] = ftp_url
         return 0
@@ -612,7 +612,7 @@ def test_sync_for_meeting_name_runs_tdoc_list_even_when_no_ftp_url(
         )
         return 1
 
-    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None, **kwargs):
         file_sync_called["value"] = True
         return 0
 
@@ -730,7 +730,7 @@ def test_sync_all_tracked_meetings_skips_file_scan_when_no_ftp_url(
         )
         return 1
 
-    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None, **kwargs):
         file_sync_called["value"] = True
         return 0
 

@@ -44,6 +44,10 @@ fields are not necessarily schema columns.
 
 Important change entry points:
 
+- Meeting auxiliary-file sync scans `inbox/`, `docs/`, `tdoc/`, and `review/`
+  recursively to `sync.tdoc_ftp_max_depth` (meeting root depth 0). Preserve
+  group-scoped filename matching, folder-based types, and additive URL upserts;
+  discovery stores metadata and does not download files.
 - TDoc family routing/completeness: `models/tdoc_content_families.py`, the single
   registry used by discovery, extraction, content, search, and schema reporting.
 - Batch extraction: `services/tdoc_pipeline.py` + `pipeline_runtime.py`;

@@ -189,8 +189,8 @@ class TDocRepository(Protocol):
         """Return the TDoc IDs currently stored for ``meeting_id``.
 
         Used by the TDoc sync flow to compute the ID set passed to
-        :class:`TDocFileService`, whose FTP scan needs a known prefix
-        list to recognise attachments. Returns an empty list when the
+        :class:`TDocFileService`, whose FTP scan needs known IDs
+        to recognise attachments. Returns an empty list when the
         meeting has no TDocs (or does not exist).
         """
         ...
@@ -600,7 +600,7 @@ class TestCaseRepository(Protocol):
 
 
 class TDocFileRepository(Protocol):
-    """Storage operations for auxiliary TDoc files (revisions, reviews, support)."""
+    """Storage operations for auxiliary TDoc files (revisions, drafts, reviews, support)."""
 
     def upsert_many(self, files: list[TDocFile]) -> int:
         """Insert or update multiple TDocFile records keyed by ``url``.
@@ -626,7 +626,7 @@ class TDocFileRepository(Protocol):
         Optional filters:
         - ``tdoc_id``: exact match against the owning TDoc identifier.
         - ``file_type``: exact match against the ``type`` column
-          (``"revision"`` / ``"review"`` / ``"support"``).
+          (``"revision"`` / ``"draft"`` / ``"review"`` / ``"support"``).
         - ``file_type_in``: iterable of allowed ``type`` values; useful for
           ``type IN ('revision', 'review')`` queries.
         """
@@ -636,7 +636,7 @@ class TDocFileRepository(Protocol):
         """Return every TDocFile whose ``tdoc_id`` matches, no limit.
 
         Ordered by ``(type, ftp_url) ASC`` so the output groups by
-        category (``revision`` / ``review`` / ``support``) and is
+        category (``revision`` / ``draft`` / ``review`` / ``support``) and is
         deterministic across calls. Used by ``tdoc show`` to surface
         every auxiliary file for the requested TDoc.
         """
@@ -650,7 +650,7 @@ class TDocFileRepository(Protocol):
         one row. The list return type keeps the caller-side shape
         uniform with the multi-row :meth:`get_for_tdoc_id`. Used by
         ``tdoc show --ftp-url <url>`` to surface the auxiliary file
-        (revision / review / support) attached to the requested URL
+        (revision / draft / review / support) attached to the requested URL
         rather than to a parent ``tdoc_id``.
         """
         ...
@@ -658,9 +658,8 @@ class TDocFileRepository(Protocol):
     def delete_for_tdoc_ids(self, tdoc_ids: Iterable[str]) -> int:
         """Delete every TDocFile whose ``tdoc_id`` is in ``tdoc_ids``.
 
-        Used by the sync flow to clear stale rows for a meeting before
-        re-inserting the freshly scraped set, so files removed upstream
-        do not linger in the table. Returns the number of rows deleted.
+        Returns the number of rows deleted. Meeting sync itself is additive
+        and does not call this method to remove stale rows.
         Passing an empty iterable is a no-op (returns 0).
         """
         ...

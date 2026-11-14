@@ -139,7 +139,7 @@ TDocs are represented by the `TDoc` model with these fields:
 
 ### TDocFile records (auxiliary attachments)
 
-The `TDocFile` model captures auxiliary files attached to a TDoc: revisions, reviews, and support documents. These are populated automatically as part of `tdoc sync` and stored in the `tdoc_files` table.
+The `TDocFile` model captures auxiliary files attached to a TDoc: revisions, drafts, reviews, and support documents. These are populated automatically as part of `tdoc sync` and stored in the `tdoc_files` table.
 
 - `id` (int)
   - Auto-incrementing primary key.
@@ -148,7 +148,7 @@ The `TDocFile` model captures auxiliary files attached to a TDoc: revisions, rev
   - Foreign key into `tdocs.tdoc_id`. The owning TDoc must already be persisted before the auxiliary file is recorded.
 
 - `type` (str)
-  - One of three values: `revision`, `review`, or `support`.
+  - One of four values: `revision`, `draft`, `review`, or `support`.
   - The set of allowed values is fixed; see `models/tdoc_file.py` for the canonical constants.
 
 - `file` (str)
@@ -165,39 +165,31 @@ The `TDocFile` model captures auxiliary files attached to a TDoc: revisions, rev
 
 ### Where auxiliary TDoc files live
 
-Auxiliary TDoc files are stored in meeting-specific subfolders, scanned in this order during `tdoc sync`:
-
-- `Inbox/`
-  - Carries intermediate revision TDoc ZIPs for most meetings.
-  - File pattern: `{tdoc_id}r#.zip` (e.g. `R5s260001r1.zip`).
-  - Type: `revision`.
-
-- `Docs/` and `Tdocs/` (mutually exclusive)
-  - Stores the base TDoc ZIPs (`{tdoc_id}.zip`).
-  - For R5 TTCN Workshop meetings, also stores revision ZIPs (the workshop keeps revisions under `Docs/` rather than `Inbox/`).
-  - Type: `revision`.
-
-- `Review/`
-  - Present only in R5 TTCN email meetings.
-  - File patterns:
-    - `{tdoc_id}_MCC160Comments[_r#]?.zip` — TTCN CR review documents.
-      Type: `review`.
-    - `{tdoc_id}_*.zip` (other suffixes) — supporting draft prose CR documents.
-      Type: `support`.
+`tdoc sync` recursively scans meeting subtrees `Inbox/`, `Docs/`, `tdoc/`,
+and `Review/` up to `sync.tdoc_ftp_max_depth` (default 4; the meeting root
+is depth 0). It does not scan `Tdocs/`. Folder names and matching are
+case-insensitive. See [the sync flow](processes.md#tdoc-metadata-and-auxiliary-files)
+for skip and persistence behavior.
 
 ### Classification rules
 
-The filename parser in `src/doc3gpp/parsers/tdoc_file_parser.py` classifies each candidate file by stripping the longest matching `{tdoc_id}` prefix and inspecting the remainder:
+The filename parser accepts `.zip`, `.doc`, `.docx`, `.ppt`, and `.pptx`
+(case-insensitive) and matches known meeting TDoc IDs anywhere in the filename.
+Only IDs belonging to the meeting's TSG/WG group are eligible; the first eligible
+known ID by position is used. If the meeting has no group, all known IDs must
+have one unambiguous group or the scan is skipped. An exact `{tdoc_id}.zip`
+is the base TDoc and is skipped. Sync stores listing metadata, not file content.
 
-| Suffix after the TDoc ID   | Type       |
-|----------------------------|------------|
-| `r` followed by digits     | `revision` |
-| `_MCC160Comments` (optionally `_r#`) | `review`   |
-| `_` + anything else        | `support`  |
-| (no suffix)                | skipped (base TDoc) |
-| anything else              | skipped    |
+| Top-level subtree | Filename condition | Type |
+| --- | --- | --- |
+| `Inbox/`, `Docs/`, `tdoc/` | Starts with `draft` | `draft` |
+| `Inbox/`, `Docs/`, `tdoc/` | Other matching filename | `revision` |
+| `Review/` | Contains `mcc160comment` | `review` |
+| `Review/` | Other matching filename | `support` |
 
-A file whose TDoc ID is not in the local `tdocs` table is silently dropped — auxiliary-file sync runs after the TDoc sync so the parser can match against the freshly-persisted TDoc IDs.
+The conditions are case-insensitive and apply throughout each subtree.
+Auxiliary-file sync runs after the TDoc list sync, so matches use the
+freshly-persisted meeting IDs.
 
 ### Additional TDoc sources
 
@@ -206,7 +198,7 @@ from the 3GPP portal via `GenerateDocumentList.aspx?meetingId={meeting_id}`.
 The sheet format is identical to the legacy FTP `TDoc_List_Meeting_*.xlsx`
 files, so the same parser produces the `TDoc` rows.
 
-Auxiliary TDoc files (revisions, review packs, supporting documents) are
+Auxiliary TDoc files (revisions, drafts, review packs, supporting documents) are
 still discovered by scanning the meeting's FTP subfolders after the TDoc
 list sync, because those artifacts are not exposed through the portal
 XLSX endpoint.
@@ -561,7 +553,7 @@ From a meeting `ftp_url`, the following directory layout is common:
    - (R5 TTCN Workshop meetings only) the `Docs/` only exists for meeting on and after 2016. There are multiple `TDoc_List_Meeting_TTCN Workshop{#xx}.xlsx` files, where the `Workshop{#xx}` matches the same part of the meeting name from meeting calendar. Moreover, the TDoc revision files named `{tdoc_id}r#.zip` are also stored under the same `Docs/` directory rather than `Inbox/`.
    - A revision TDoc eventually becomes the new official TDoc, with new TDoc IDs and is uploaded to `Docs/` or `Tdocs/`.
    - The TDoc list XLSX is updated over time to capture new TDocs and statuses such as revised, agreed, withdrawn, etc.
-   - Files matching `{tdoc_id}r#.zip` here are surfaced in the `tdoc_files` table with `type='revision'`.
+   - Discovery scans `Docs/` but not `Tdocs/`; matching files are classified using the rules above.
 
 3. `Review/` (R5 TTCN email meetings only)
    - Present in R5 TTCN email meetings with an extra review folder under the meeting FTP tree.
@@ -569,7 +561,7 @@ From a meeting `ftp_url`, the following directory layout is common:
    - Review files are named `{tdoc_id}_MCC160Comments.zip`.
    - Updated review revisions are named `{tdoc_id}_MCC160Comments_r#.zip`, where `#` is the revision number.
    - The folder can also contain supporting draft prose CR documents for the same TTCN CR, typically named `{tdoc_id}_xxxxx.zip`.
-   - Files matching the `_MCC160Comments[_r#]?` pattern are surfaced as `type='review'`; the rest of `{tdoc_id}_*.zip` files in this folder are surfaced as `type='support'`.
+   - Matching filenames containing `MCC160Comment` are surfaced as `review`; other matching files here are `support`.
 
 4. `Report/`
    - Stores meeting minutes and reports.
@@ -578,7 +570,7 @@ From a meeting `ftp_url`, the following directory layout is common:
 5. `Inbox/`
    - If present, stores temporary documents during the meeting.
    - This often includes intermediate revision TDocs, new draft TDocs, liaison statements (LSs), and discussion papers created during the meeting.
-   - Files matching `{tdoc_id}r#.zip` are surfaced as `type='revision'`. Files with other TDoc prefixes or unrelated documents are ignored.
+   - Matching filenames starting with `draft` are `draft`; other matching files are `revision`. Files without an eligible known meeting ID are ignored.
 
 6. `LSin/` and `LSout/`
    - Store incoming and outgoing liaison statements, respectively.

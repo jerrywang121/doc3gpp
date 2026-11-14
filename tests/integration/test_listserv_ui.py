@@ -250,6 +250,8 @@ def test_catalog_panel_escapes_unsafe_stored_ids_without_links(client: TestClien
 def test_listserv_show_escapes_upstream_values_and_preserves_parse_states(
     client: TestClient,
 ) -> None:
+    from bs4 import BeautifulSoup
+
     api_record = client.get("/api/listserv/show", params={"url": PARSED_URL})
     assert api_record.status_code == 200, api_record.text
     parsed = client.get("/listserv/show", params={"url": PARSED_URL})
@@ -274,8 +276,13 @@ def test_listserv_show_escapes_upstream_values_and_preserves_parse_states(
         "/listserv/show", params={"url": NONSTANDARD_PORT_URL}
     )
     assert nonstandard_port.status_code == 200
-    assert 'href="https://list.etsi.org:8443/' not in nonstandard_port.text
-    assert "https://list.etsi.org:8443/" in nonstandard_port.text
+    soup = BeautifulSoup(nonstandard_port.text, "html.parser")
+    archive_label = soup.find("dt", string="Archive URL")
+    assert archive_label is not None
+    archive_value = archive_label.find_next_sibling("dd")
+    assert archive_value is not None
+    assert archive_value.find("a") is None
+    assert archive_value.get_text(strip=True) == NONSTANDARD_PORT_URL
 
 
 def test_listserv_show_links_safe_attachment_urls_but_leaves_unsafe_schemes_unlinked(

@@ -56,6 +56,16 @@ distinct meeting IDs already represented in `tdocs`; it does not discover every
 3GPP meeting automatically. Auxiliary `tdoc_files` rows are listing metadata,
 not extracted content or the outer-ZIP inventory.
 
+The auxiliary scan recursively follows direct child directories under `inbox/`,
+`docs/`, `tdoc/`, and `review/`, not `tdocs/`. The meeting root is depth 0;
+`sync.tdoc_ftp_max_depth` defaults to 4, and 0 disables the scan. Directory
+failures are skipped. Only supported filenames containing known meeting TDoc
+IDs in the meeting's group are recorded; if the group is absent, it must be
+unambiguously inferred from those IDs. Matching, extensions, and folder-based
+types are described in [TDoc file classification](3gpp-knowledge.md#classification-rules).
+The scan upserts by URL and does not remove previously recorded rows when files
+disappear or settings change. It does not download the discovered files.
+
 ### Specifications and work items
 
 `spec sync --tsg R5` fetches a specification list, then prepares detail pages

@@ -26,7 +26,7 @@ def _client(*, directory_html: dict[str, str]) -> MagicMock:
 
     def get_text(url: str) -> str:
         for subdir, html in directory_html.items():
-            if url.rstrip("/").endswith(subdir.rstrip("/")):
+            if url.lower().rstrip("/").endswith(subdir.lower().rstrip("/")):
                 return html
         raise httpx.HTTPError(f"unexpected URL {url}")
 
@@ -51,7 +51,7 @@ def test_scans_each_known_subfolder_and_collects_unique_files() -> None:
         directory_html={
             "inbox/": _listing_html(
                 "https://www.3gpp.org/ftp/meeting/Inbox/", "R5s260001r1.zip"
-            ),
+            ) + '<a href="Intermediate_CRs/">Intermediate_CRs</a>',
             "inbox/intermediate_crs/": _listing_html(
                 intermediate_crs_base, "R5-261719r1.zip"
             ),
@@ -66,7 +66,7 @@ def test_scans_each_known_subfolder_and_collects_unique_files() -> None:
 
     with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
         files = fetch_tdoc_files_from_meeting_ftp(
-            "ftp://example.com/meeting/",
+            "meeting/",
             tdoc_ids=["R5s260001", "R5-261719"],
         )
 
@@ -80,8 +80,7 @@ def test_scans_each_known_subfolder_and_collects_unique_files() -> None:
     )
     # Base TDoc ZIP is still skipped even though it appears in the listing.
     assert "R5s260001.zip" not in by_file
-    # All five subfolders were attempted; tdocs/ 404'd because the
-    # ``directory_html`` map has no entry for it.
+    # Four root folders and the linked Intermediate_CRs subfolder.
     assert client.get_text.call_count == 5
 
 
@@ -91,6 +90,7 @@ def test_intermediate_crs_subfolder_is_scanned() -> None:
     )
     client = _client(
         directory_html={
+            "inbox/": '<a href="Intermediate_CRs/">Intermediate_CRs</a>',
             "inbox/intermediate_crs/": _listing_html(
                 intermediate_crs_base,
                 "R5-261719r1.zip",
@@ -102,17 +102,17 @@ def test_intermediate_crs_subfolder_is_scanned() -> None:
 
     with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
         files = fetch_tdoc_files_from_meeting_ftp(
-            "ftp://example.com/meeting/", tdoc_ids=["R5-261719"]
+            "meeting/", tdoc_ids=["R5-261719"]
         )
 
     by_file = {f.file: f for f in files}
     assert by_file["R5-261719r1.zip"].type == TDocFileTypeRevision
-    assert by_file["R5-261719_draft.zip"].type == TDocFileTypeSupport
+    assert by_file["R5-261719_draft.zip"].type == TDocFileTypeRevision
     assert "R5-261719.zip" not in by_file
 
 
 def test_missing_subfolder_is_silently_skipped() -> None:
-    # Only ``docs/`` is reachable; the other four return HTTPError.
+    # Only ``docs/`` is reachable; the other roots return HTTPError.
     docs_base = "https://www.3gpp.org/ftp/meeting/Docs/"
     client = _client(
         directory_html={"docs/": _listing_html(docs_base, "R5s260001r1.zip")}
@@ -120,7 +120,7 @@ def test_missing_subfolder_is_silently_skipped() -> None:
 
     with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
         files = fetch_tdoc_files_from_meeting_ftp(
-            "tsg_ran/WG5/meeting/", tdoc_ids=["R5s260001"]
+            "meeting/", tdoc_ids=["R5s260001"]
         )
 
     assert len(files) == 1
@@ -138,18 +138,18 @@ def test_empty_tdoc_ids_short_circuits() -> None:
 
 
 def test_duplicate_url_across_subfolders_is_kept_once() -> None:
-    base = "https://www.3gpp.org/ftp/meeting/"
-    # The same file URL appears under both inbox/ and docs/.
+    base = "https://www.3gpp.org/ftp/meeting/inbox/"
+    # Duplicate anchors in one listing must not create duplicate records.
     client = _client(
         directory_html={
-            "inbox/": _listing_html(base, "R5s260001r1.zip"),
+            "inbox/": _listing_html(base, "R5s260001r1.zip", "R5s260001r1.zip"),
             "docs/": _listing_html(base, "R5s260001r1.zip"),
         }
     )
 
     with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
         files = fetch_tdoc_files_from_meeting_ftp(
-            "tsg_ran/WG5/meeting/", tdoc_ids=["R5s260001"]
+            "meeting/", tdoc_ids=["R5s260001"]
         )
 
     assert len(files) == 1
@@ -167,7 +167,7 @@ def test_terminal_subdir_in_ftp_url_is_stripped_to_avoid_double_scan() -> None:
 
     with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
         files = fetch_tdoc_files_from_meeting_ftp(
-            "tsg_ran/WG5/meeting/docs/", tdoc_ids=["R5s260001"]
+            "meeting/docs/", tdoc_ids=["R5s260001"]
         )
 
     assert len(files) == 1

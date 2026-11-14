@@ -113,7 +113,7 @@ class SQLAlchemyTDocFileRepository:
     def get_for_tdoc_id(self, tdoc_id: str) -> list[TDocFile]:
         """Return every TDocFile for a given TDoc, ordered by category then URL.
 
-        Groups by ``type`` (``revision`` / ``review`` / ``support``) first
+        Groups by ``type`` (``revision`` / ``draft`` / ``review`` / ``support``) first
         so the output is easy to scan, with ``ftp_url`` as a stable
         secondary order. The FK index on ``tdoc_id`` covers the WHERE;
         per-TDoc row counts are bounded (typically <10), so the

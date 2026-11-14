@@ -41,7 +41,7 @@ TESTCASE_PATHS: tuple[str, ...] = (
 )
 
 # Duplicates ``models/tdoc_file.py::TDocFileTypes``.
-TDOC_FILE_TYPES: tuple[str, ...] = ("revision", "review", "support")
+TDOC_FILE_TYPES: tuple[str, ...] = ("revision", "draft", "review", "support")
 
 # CR category letters from the cover page (see ``models/tdoc_cr.py``).
 CR_CATEGORIES: tuple[str, ...] = ("F", "B", "A", "C", "D")
@@ -228,7 +228,7 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
             fields=(
                 FieldInfo("id", "int", False, "Database-assigned primary key."),
                 FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id."),
-                FieldInfo("type", "str", False, "Attachment kind: revision, review, or support.", TDOC_FILE_TYPES),
+                FieldInfo("type", "str", False, "Attachment kind: revision, draft, review, or support.", TDOC_FILE_TYPES),
                 FieldInfo("file", "str", False, "Bare attachment filename, e.g. R5s260001_MCC160Comments.zip."),
                 FieldInfo("ftp_url", "str", False, "Relative download path under https://www.3gpp.org/ftp/; unique upsert key."),
                 FieldInfo("uploaded_date", "date", True, "Upload date from the FTP 'Last Modified' column."),

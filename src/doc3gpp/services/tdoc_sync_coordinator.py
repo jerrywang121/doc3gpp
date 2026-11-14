@@ -60,6 +60,7 @@ class TDocSyncCoordinator:
         tdoc_list_sync_interval: timedelta = timedelta(minutes=30),
         tdoc_list_closed_window: timedelta = timedelta(days=90),
         tdoc_list_url_template: str = "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}",
+        tdoc_ftp_max_depth: int = 4,
     ) -> None:
         self._meeting_repository = meeting_repository
         self._meetings = MeetingService(meeting_repository)
@@ -69,6 +70,7 @@ class TDocSyncCoordinator:
         self._tdoc_list_sync_interval = tdoc_list_sync_interval
         self._tdoc_list_closed_window = tdoc_list_closed_window
         self._tdoc_list_url_template = tdoc_list_url_template
+        self._tdoc_ftp_max_depth = tdoc_ftp_max_depth
 
     def sync_for_meeting_id(
         self,
@@ -204,6 +206,8 @@ class TDocSyncCoordinator:
                 ftp_url=meeting.ftp_url,
                 tdoc_ids=tdoc_ids,
                 on_progress=on_progress,
+                tsg=meeting.tsg,
+                max_depth=self._tdoc_ftp_max_depth,
             )
             file_scan_note = f"{file_count} auxiliary TDoc file(s) stored"
         else:

@@ -41,7 +41,7 @@ def test_sync_forwards_files_to_upsert_many(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "doc3gpp.services.tdoc_file_service.fetch_tdoc_files_from_meeting_ftp",
-        lambda ftp_url, tdoc_ids: fetched,
+        lambda ftp_url, tdoc_ids, **kwargs: fetched,
     )
 
     count = service.sync_from_meeting_ftp(
@@ -62,7 +62,7 @@ def test_sync_with_empty_tdoc_ids_is_noop(monkeypatch) -> None:
 
     called = {"value": False}
 
-    def fake_fetch(ftp_url, tdoc_ids):
+    def fake_fetch(ftp_url, tdoc_ids, **kwargs):
         called["value"] = True
         return []
 
@@ -84,7 +84,7 @@ def test_sync_with_no_tdocs_found_is_noop(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "doc3gpp.services.tdoc_file_service.fetch_tdoc_files_from_meeting_ftp",
-        lambda ftp_url, tdoc_ids: [],
+        lambda ftp_url, tdoc_ids, **kwargs: [],
     )
 
     count = service.sync_from_meeting_ftp(
@@ -99,7 +99,7 @@ def test_sync_propagates_fetch_exception(monkeypatch) -> None:
     repo = _FakeTDocFileRepository()
     service = TDocFileService(repo)  # type: ignore[arg-type]
 
-    def fake_fetch(ftp_url, tdoc_ids):
+    def fake_fetch(ftp_url, tdoc_ids, **kwargs):
         raise RuntimeError("network down")
 
     monkeypatch.setattr(

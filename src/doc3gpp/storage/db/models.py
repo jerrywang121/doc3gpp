@@ -148,10 +148,10 @@ class WiORM(Base):
 
 
 class TDocFileORM(Base):
-    """Auxiliary file attached to a TDoc (revision, review, or support).
+    """Auxiliary file attached to a TDoc (revision, draft, review, or support).
 
     One row per file observed in a meeting's FTP subfolders (``Inbox/``,
-    ``Docs/``, ``Tdocs/``, or ``Review/``). Identity is the
+    ``Docs/``, ``tdoc/``, or ``Review/``). Identity is the
     download URL path relative to ``https://www.3gpp.org/ftp/``: the
     same file lives at exactly one upstream location, so the
     ``ftp_url`` column is the natural upsert key and is the only

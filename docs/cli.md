@@ -327,8 +327,9 @@ Purpose:
 
 - Download each meeting's TDoc-list XLSX from the 3GPP portal
   (`GenerateDocumentList.aspx?meetingId={meeting_id}`) and persist the
-  rows. Auxiliary TDoc files (revisions, review packs, supporting
-  documents) are still scanned from the meeting's FTP folders. With no
+  rows. Auxiliary TDoc files (revisions, drafts, review packs, supporting
+  documents) are still scanned from the meeting's FTP folders; see the
+  [sync flow](processes.md#tdoc-metadata-and-auxiliary-files). With no
   selector, refresh every meeting currently tracked in the `tdocs`
   table.
 
@@ -564,7 +565,7 @@ Behavior:
   bool in `json`.
 - `values` is a comma-joined string of the fixed set (`cr_cat`
   `F,B,A,C,D` on the cover page; `tdoc_files.type`
-  `revision,review,support`); `"-"` when the field is free-form
+  `revision,draft,review,support`); `"-"` when the field is free-form
   (e.g. `tdocs.status`, `tdocs.type`).
 
 Examples:
@@ -662,7 +663,7 @@ Options:
       independent of the derived Markdown cache. A successful listing can remain
       visible after a later conversion failure. Old entries are not bulk-backfilled.
     - `files` — array of every `TDocFile` row matching `tdoc_id`
-      (auxiliary revisions / reviews / support files). Every
+      (auxiliary revisions / drafts / reviews / support files). Every
       dataclass field of `TDocFile` is serialised (`id`,
       `tdoc_id`, `type`, `file`, `ftp_url`, `uploaded_date`).
       Omitted when the TDoc has no auxiliary files.
@@ -752,7 +753,7 @@ Behavior:
   - A single `tdoc_id`-keyed read on `tdoc_files` via
     `SQLAlchemyTDocFileRepository.get_for_tdoc_id(tdoc.tdoc_id)`,
     ordered by `(type, ftp_url) ASC` so the output groups by
-    category (revision / review / support). Runs unconditionally —
+    category (revision / draft / review / support). Runs unconditionally —
     a TDoc may have auxiliary files even when the cover has not
     been extracted.
 - The bundled `TDocShowRecord(tdoc, cover, ttcn, changes, extracted_at,

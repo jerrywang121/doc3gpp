@@ -1,18 +1,9 @@
 """Domain model for auxiliary files attached to a 3GPP TDoc.
 
-A ``TDocFile`` is an attachment that lives next to a base TDoc in a meeting
-FTP directory. Three kinds of attachments are recognised:
-
-- ``revision``: a renamed revision of the base TDoc
-  (e.g. ``R5s260001r1.zip``). Stored under ``Inbox/`` for most meetings,
-  under ``Docs/`` for R5 TTCN Workshop meetings, and under
-  ``Inbox/Intermediate_CRs/`` for R5 Intermediate CRs.
-- ``review``: a TTCN CR review document produced for a base TDoc
-  (e.g. ``R5s260001_MCC160Comments.zip``). Stored under ``Review/`` for
-  R5 TTCN email meetings.
-- ``support``: a supporting draft prose CR document for the same TTCN CR
-  (e.g. ``R5s260001_draft_prose.zip``). Stored alongside reviews in
-  ``Review/``.
+A ``TDocFile`` is an auxiliary file in a meeting FTP directory. Files under
+Inbox, Docs and Tdoc are classified as ``draft`` when their names start with
+``draft``, otherwise as ``revision``. Files under Review are classified as
+``review`` when their names contain ``MCC160Comment``, otherwise as ``support``.
 
 The base TDoc itself (``{tdoc_id}.zip``) is **not** modelled here — it lives
 on :class:`doc3gpp.models.tdoc.TDoc` as the ``ftp_url`` field.
@@ -23,13 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-# Allowed values for :attr:`TDocFile.type`. Centralised as module constants so
-# callers and the SQL column constraint can share one source of truth.
+# Allowed values for :attr:`TDocFile.type`, shared by application callers.
 TDocFileTypeRevision = "revision"
+TDocFileTypeDraft = "draft"
 TDocFileTypeReview = "review"
 TDocFileTypeSupport = "support"
 TDocFileTypes: frozenset[str] = frozenset(
-    {TDocFileTypeRevision, TDocFileTypeReview, TDocFileTypeSupport}
+    {TDocFileTypeRevision, TDocFileTypeDraft, TDocFileTypeReview, TDocFileTypeSupport}
 )
 
 
@@ -44,7 +35,7 @@ class TDocFile:
         tdoc_id: Foreign key into ``tdocs.tdoc_id``. The owning TDoc must
             already be persisted before a :class:`TDocFile` is upserted so
             the FK constraint is satisfied.
-        type: One of ``"revision"``, ``"review"``, or ``"support"`` (see
+        type: One of ``"revision"``, ``"draft"``, ``"review"``, or ``"support"`` (see
             module-level constants). Stored as a short text column with a
             length-32 budget; the full set of valid values is fixed so the
             column does not need a CHECK constraint.

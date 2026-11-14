@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections import deque
 from collections.abc import Iterable
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin
 
 import httpx
 
@@ -11,19 +13,19 @@ from doc3gpp.parsers.normalizers import (
     FTP_BASE_URL,
     normalize_ftp_path,
 )
-from doc3gpp.parsers.tdoc_file_parser import parse_tdoc_files_from_listing
+from doc3gpp.parsers.tdoc_file_parser import (
+    parse_tdoc_files_from_listing,
+    parse_tdoc_subfolders,
+)
 from doc3gpp.scraping.client import ScraperClient
 
 logger = logging.getLogger(__name__)
 
 
-#: Nested ``inbox/intermediate_crs/`` entry covers R5 meetings whose
-#: Intermediate CRs live under a dedicated subdirectory of ``Inbox/``.
 TDOC_FILE_SUBDIRS: tuple[str, ...] = (
     "inbox/",
-    "inbox/intermediate_crs/",
     "docs/",
-    "tdocs/",
+    "tdoc/",
     "review/",
 )
 
@@ -45,8 +47,8 @@ def _normalize_optional_url(value: object) -> str | None:
 
 
 def _strip_terminal_subdir(base_root: str) -> str:
-    for suffix in TDOC_FILE_SUBDIRS + ("tdoc/",):
-        if base_root.lower().endswith(suffix):
+    for suffix in ("inbox/intermediate_crs/",) + TDOC_FILE_SUBDIRS + ("tdocs/",):
+        if base_root.lower().endswith("/" + suffix) or base_root.lower() == suffix:
             base_root = base_root[: -len(suffix)]
             if not base_root.endswith("/"):
                 base_root += "/"
@@ -54,29 +56,40 @@ def _strip_terminal_subdir(base_root: str) -> str:
     return base_root
 
 
+def _url_identity(url: str) -> str:
+    value = normalize_ftp_path(url)
+    while (decoded := unquote(value)) != value:
+        value = decoded
+    return value.rstrip("/").casefold()
+
+
 def fetch_tdoc_files_from_meeting_ftp(
     ftp_url: str,
     tdoc_ids: Iterable[str],
+    *,
+    tsg: str | None = None,
+    max_depth: int = 4,
 ) -> list[TDocFile]:
-    """Scan a meeting's FTP subfolders for auxiliary TDoc files.
-
-    Visits each subfolder in :data:`TDOC_FILE_SUBDIRS` under
-    ``ftp_url`` and returns the union of files that match the
-    supplied ``tdoc_ids`` and the revision / review / support
-    naming conventions. Subfolders that 404 are silently skipped
-    (most meetings only have one of ``docs/``/``tdocs/``, only R5
-    TTCN email meetings have a ``review/`` folder, and only R5
-    meetings route Intermediate CRs through
-    ``inbox/intermediate_crs/``); any other HTTP error propagates so
-    transient failures surface.
-
-    Files that appear in more than one subfolder are deduplicated by
-    URL — the same upstream location can be reached through both
-    ``docs/`` and the meeting root in some legacy layouts.
-    """
+    """Scan selected meeting subtrees up to the meeting-relative depth limit."""
     tdoc_id_set = {tid for tid in tdoc_ids if tid}
     if not tdoc_id_set:
         logger.debug("No TDoc IDs supplied; skipping TDoc file scan for %s", ftp_url)
+        return []
+
+    def group(tid: str) -> str | None:
+        match = re.match(r"^([a-z]+\d*)", tid, re.IGNORECASE)
+        return match.group(1).casefold() if match else None
+
+    if tsg is None:
+        groups = {group(tid) for tid in tdoc_id_set}
+        if len(groups) != 1 or None in groups:
+            logger.warning("Cannot infer a unique TDoc group for %s; skipping file scan", ftp_url)
+            return []
+        meeting_group = next(iter(groups))
+    else:
+        meeting_group = tsg.strip().casefold()
+    tdoc_id_set = {tid for tid in tdoc_id_set if group(tid) == meeting_group}
+    if not tdoc_id_set or max_depth < 1:
         return []
 
     base_url = normalize_ftp_path(ftp_url)
@@ -86,10 +99,19 @@ def fetch_tdoc_files_from_meeting_ftp(
 
     results: list[TDocFile] = []
     seen_urls: set[str] = set()
+    seen_directories: set[str] = set()
 
     with ScraperClient() as client:
-        for subfolder in TDOC_FILE_SUBDIRS:
-            directory_url = urljoin(FTP_BASE_URL, base_root + subfolder)
+        queue = deque(
+            (urljoin(FTP_BASE_URL, base_root + subfolder), 1, subfolder.rstrip("/"))
+            for subfolder in TDOC_FILE_SUBDIRS
+        )
+        while queue:
+            directory_url, depth, root_folder = queue.popleft()
+            key = _url_identity(directory_url)
+            if key in seen_directories:
+                continue
+            seen_directories.add(key)
             logger.debug("Scanning FTP directory for TDoc files: %s", directory_url)
             try:
                 html = client.get_text(directory_url)
@@ -100,17 +122,24 @@ def fetch_tdoc_files_from_meeting_ftp(
                 continue
 
             for file in parse_tdoc_files_from_listing(
-                html, base_url=directory_url, tdoc_ids=tdoc_id_set
+                html, base_url=directory_url, tdoc_ids=tdoc_id_set,
+                folder=root_folder, restrict_to_directory=True,
             ):
-                if file.ftp_url in seen_urls:
+                key = _url_identity(file.ftp_url)
+                if key in seen_urls:
                     continue
-                seen_urls.add(file.ftp_url)
+                seen_urls.add(key)
                 results.append(file)
+            if depth < max_depth:
+                queue.extend(
+                    (child, depth + 1, root_folder)
+                    for child in parse_tdoc_subfolders(html, directory_url)
+                )
 
     logger.info(
         "Found %s auxiliary TDoc file(s) under %s across %s subfolder(s)",
         len(results),
         ftp_url,
-        len(TDOC_FILE_SUBDIRS),
+        len(seen_directories),
     )
     return results

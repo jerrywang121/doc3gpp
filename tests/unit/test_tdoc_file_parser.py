@@ -46,19 +46,19 @@ def test_classify_revision_file_high_index() -> None:
 
 def test_classify_review_file() -> None:
     assert classify_tdoc_filename(
-        "R5s260001_MCC160Comments.zip", _TDOC_IDS
+        "R5s260001_MCC160Comments.zip", _TDOC_IDS, folder="review"
     ) == ("R5s260001", TDocFileTypeReview)
 
 
 def test_classify_review_revision_file() -> None:
     assert classify_tdoc_filename(
-        "R5s260001_MCC160Comments_r1.zip", _TDOC_IDS
+        "R5s260001_MCC160Comments_r1.zip", _TDOC_IDS, folder="review"
     ) == ("R5s260001", TDocFileTypeReview)
 
 
 def test_classify_support_file() -> None:
     assert classify_tdoc_filename(
-        "R5s260001_draft_prose.zip", _TDOC_IDS
+        "R5s260001_draft_prose.zip", _TDOC_IDS, folder="review"
     ) == ("R5s260001", TDocFileTypeSupport)
 
 
@@ -93,19 +93,19 @@ def test_classify_dash_format_revision() -> None:
 
 def test_classify_ttcn_review_basename() -> None:
     assert classify_tdoc_filename(
-        "R5s250008_MCC160Comments.zip", _TDOC_IDS
+        "R5s250008_MCC160Comments.zip", _TDOC_IDS, folder="review"
     ) == ("R5s250008", TDocFileTypeReview)
 
 
 def test_classify_ttcn_review_revision() -> None:
     assert classify_tdoc_filename(
-        "R5s250009_MCC160Comments_r1.zip", _TDOC_IDS
+        "R5s250009_MCC160Comments_r1.zip", _TDOC_IDS, folder="review"
     ) == ("R5s250009", TDocFileTypeReview)
 
 
 def test_classify_support_with_complex_suffix() -> None:
     assert classify_tdoc_filename(
-        "R5s250009_R5-25xxxx_38.508-1_NRCA_interband_BWs.zip", _TDOC_IDS
+        "R5s250009_R5-25xxxx_38.508-1_NRCA_interband_BWs.zip", _TDOC_IDS, folder="review"
     ) == ("R5s250009", TDocFileTypeSupport)
 
 
@@ -118,9 +118,10 @@ def test_classify_non_zip_file_is_skipped() -> None:
     assert classify_tdoc_filename("agenda.docx", _TDOC_IDS) is None
 
 
-def test_classify_unrecognized_suffix_is_skipped() -> None:
-    # Suffix has no underscore and no revision marker.
-    assert classify_tdoc_filename("R5s260001abc.zip", _TDOC_IDS) is None
+def test_classify_other_suffix_in_inbox_as_revision() -> None:
+    assert classify_tdoc_filename("R5s260001abc.zip", _TDOC_IDS) == (
+        "R5s260001", TDocFileTypeRevision
+    )
 
 
 def test_classify_empty_filename_is_skipped() -> None:
@@ -131,13 +132,10 @@ def test_classify_empty_id_set_is_skipped() -> None:
     assert classify_tdoc_filename("R5s260001r1.zip", []) is None
 
 
-def test_classify_id_with_underscore_suffix_is_not_misread_as_support() -> None:
-    # "R5-260300_extra.zip" -> the ID "R5-260300" is in _TDOC_IDS and the
-    # remainder "_extra" should be classified as a support file, not
-    # collide with the "r\d+" revision pattern.
+def test_classify_id_with_underscore_suffix_in_inbox_as_revision() -> None:
     assert classify_tdoc_filename(
         "R5-260300_extra.zip", _TDOC_IDS
-    ) == ("R5-260300", TDocFileTypeSupport)
+    ) == ("R5-260300", TDocFileTypeRevision)
 
 
 # ---------------------------------------------------------------------------
@@ -166,8 +164,8 @@ def test_parse_returns_matched_files_with_relative_ftp_urls() -> None:
 
     assert len(files) == 3
     assert by_name["R5s260001r1.zip"].type == TDocFileTypeRevision
-    assert by_name["R5s260001_MCC160Comments.zip"].type == TDocFileTypeReview
-    assert by_name["R5s260001_draft.zip"].type == TDocFileTypeSupport
+    assert by_name["R5s260001_MCC160Comments.zip"].type == TDocFileTypeRevision
+    assert by_name["R5s260001_draft.zip"].type == TDocFileTypeRevision
     assert all(f.tdoc_id == "R5s260001" for f in files)
     assert all(f.ftp_url.startswith("tsg_ran/") for f in files)
 
